@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -14,6 +18,12 @@ from .source_registry import get_source_by_id, load_sources
 
 
 app = FastAPI(title="News Curation MVP")
+logger = logging.getLogger(__name__)
+_ROOT = Path(__file__).resolve().parent.parent
+_MANUAL_IBOSS_PATH = Path(
+    os.environ.get("MANUAL_IBOSS_PATH", str(_ROOT / "data" / "iboss_manual.json"))
+)
+_IBOSS_MANUAL_ONLY = os.environ.get("IBOSS_MANUAL_ONLY", "1") == "1"
 
 
 class ArticleOut(BaseModel):
@@ -46,6 +56,13 @@ class CrawlIn(BaseModel):
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    sync_result = sync_manual_iboss_articles()
+    logger.info(
+        "[manual_iboss_sync] loaded=%s inserted=%s path=%s",
+        sync_result["loaded"],
+        sync_result["inserted"],
+        sync_result["path"],
+    )
 
 
 @app.get("/news", response_model=List[ArticleOut])
@@ -318,6 +335,9 @@ def crawl_all() -> dict:
         source_id = str(source.get("id") or "").strip()
         if not source_id:
             continue
+        if source_id == "i_boss" and _IBOSS_MANUAL_ONLY:
+            results.append({"source_id": source_id, "skipped": "manual_only"})
+            continue
         try:
             count = crawl_source(source)
             results.append({"source_id": source_id, "inserted": count})
@@ -335,6 +355,59 @@ def crawl_all() -> dict:
         "failed": failed,
         "ok": len(results) - failed,
     }
+
+
+@app.post("/sync-manual-iboss")
+def sync_manual_iboss() -> dict:
+    return sync_manual_iboss_articles()
+
+
+def sync_manual_iboss_articles() -> dict:
+    path = _MANUAL_IBOSS_PATH
+    if not path.exists():
+        return {"path": str(path), "loaded": 0, "inserted": 0}
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("[manual_iboss_sync_failed] path=%s error=%s", path, repr(exc))
+        return {"path": str(path), "loaded": 0, "inserted": 0, "error": str(exc)}
+
+    if isinstance(data, dict):
+        raw_articles = data.get("articles") or []
+    elif isinstance(data, list):
+        raw_articles = data
+    else:
+        raw_articles = []
+
+    inserted = 0
+    loaded = 0
+    with get_conn() as conn:
+        for item in raw_articles:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            url = str(item.get("url") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            image_url = str(item.get("image_url") or "").strip() or None
+            published_at = str(item.get("published_at") or "").strip() or None
+
+            if not title or not url or not summary:
+                continue
+            loaded += 1
+            cur = conn.execute("SELECT 1 FROM articles WHERE url = ?", (url,))
+            if cur.fetchone():
+                continue
+            conn.execute(
+                """
+                INSERT INTO articles (source_id, title, url, summary, image_url, published_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("i_boss", title, url, summary, image_url, published_at),
+            )
+            inserted += 1
+        conn.commit()
+    return {"path": str(path), "loaded": loaded, "inserted": inserted}
 
 
 def _source_name_map() -> Dict[str, str]:
