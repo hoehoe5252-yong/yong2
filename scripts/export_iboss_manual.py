@@ -14,7 +14,13 @@ from bs4 import BeautifulSoup
 
 def fetch_html(url: str, timeout: int = 20) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (compatible; yong2-local/0.1)"}
-    resp = requests.get(url, headers=headers, timeout=timeout)
+    session = requests.Session()
+    session.trust_env = False
+    resp = session.get(
+        url,
+        headers=headers,
+        timeout=timeout,
+    )
     resp.raise_for_status()
     return resp.text
 
@@ -36,13 +42,22 @@ def parse_date(text: str) -> Optional[str]:
     return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
 
 
+def _iboss_article_pattern(start_url: str) -> re.Pattern:
+    match = re.search(r"/ab-(\d+)", start_url)
+    if match:
+        category = match.group(1)
+        return re.compile(rf"/ab-{category}-\d+")
+    return re.compile(r"/ab-\d+-\d+")
+
+
 def extract_links(list_html: str, base_url: str, limit: int) -> list[str]:
     soup = BeautifulSoup(list_html, "html.parser")
     seen = set()
     links: list[str] = []
+    pattern = _iboss_article_pattern(base_url)
     for a in soup.select("a[href]"):
         href = str(a.get("href") or "").strip()
-        if not re.search(r"/ab-\d+-\d+", href):
+        if not pattern.search(href):
             continue
         url = urljoin(base_url, href)
         if url in seen:

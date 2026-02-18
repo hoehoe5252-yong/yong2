@@ -113,3 +113,16 @@
   - `<=768px`에서 카드 그리드 1열 고정(모바일에서 카드 1개씩 노출)
 - startup 자동 동기화:
   - 재배포 직후 공백을 줄이기 위해 `yozm_it` startup crawl 유지.
+
+## 업데이트 메모 (2026-02-18, 키워드 뉴스/설정)
+- 키워드 설정 저장/관리 화면 추가: `/settings`
+- 기본 키워드 시드 등록
+- Google News RSS 기반 키워드 뉴스 수집 추가
+  - `/crawl-keywords` 추가, `/crawl-all`에서 함께 실행
+  - 키워드 뉴스는 자동 찜 처리, 메인 피드에서 제외
+  - 키워드 제거 시 관련 기사/찜도 함께 제거
+- 아이보스 크롤링: `ab-7214` 카테고리 링크만 추출하도록 제한
+- 수집 옵션 환경변수:
+  - `KEYWORD_NEWS_DAYS` (기본 30)
+  - `KEYWORD_NEWS_MAX_ITEMS` (기본 30)
+  - `PRUNE_UNBOOKMARKED_DAYS` (기본 0)

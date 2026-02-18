@@ -54,12 +54,26 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS keyword_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                keyword_norm TEXT NOT NULL UNIQUE,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         _ensure_columns(
             conn,
             "articles",
             {
                 "source_id": "TEXT",
                 "image_url": "TEXT",
+                "keyword": "TEXT",
+                "keyword_norm": "TEXT",
             },
         )
 

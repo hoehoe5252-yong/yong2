@@ -6,7 +6,7 @@ import os
 import re
 import time
 from typing import Iterable, Optional, Sequence
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 import feedparser
 import requests
@@ -75,6 +75,88 @@ def crawl_rss(rss_url: str) -> int:
             inserted += 1
         conn.commit()
     return inserted
+
+
+def crawl_keyword_news(
+    keywords: Sequence[dict],
+    *,
+    days: int = 30,
+    max_items_per_keyword: int = 30,
+) -> dict:
+    if not keywords:
+        return {"inserted": 0, "bookmarked": 0, "keywords": 0}
+
+    inserted = 0
+    bookmarked = 0
+    today = date.today()
+    created_at = datetime.utcnow().isoformat()
+
+    with get_conn() as conn:
+        for keyword in keywords:
+            raw_keyword = str(keyword.get("keyword") or "").strip()
+            keyword_norm = str(keyword.get("keyword_norm") or "").strip()
+            if not raw_keyword or not keyword_norm:
+                continue
+            rss_url = _google_news_rss_url(raw_keyword)
+            seen_urls: set[str] = set()
+            collected = 0
+            for entry in _iter_entries(rss_url):
+                title = (getattr(entry, "title", "") or "").strip()
+                url = (getattr(entry, "link", "") or "").strip()
+                if not title or not url:
+                    continue
+                url = _normalize_google_news_url(url)
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+
+                published_at = _parse_published(entry)
+                if not _is_within_days(published_at, today, days=days):
+                    continue
+                summary = (getattr(entry, "summary", "") or "").strip()
+                if not summary:
+                    summary = _fetch_summary(url)
+
+                cur = conn.execute("SELECT id FROM articles WHERE url = ?", (url,))
+                row = cur.fetchone()
+                if row:
+                    article_id = row[0]
+                else:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO articles
+                          (source_id, title, url, summary, image_url, published_at, keyword, keyword_norm)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "keyword_news",
+                            title,
+                            url,
+                            summary or raw_keyword,
+                            None,
+                            published_at,
+                            raw_keyword,
+                            keyword_norm,
+                        ),
+                    )
+                    article_id = cur.lastrowid
+                    inserted += 1
+
+                conn.execute(
+                    """
+                    INSERT INTO bookmarks (article_id, created_at)
+                    VALUES (?, ?)
+                    ON CONFLICT(article_id) DO UPDATE SET removed_at = NULL
+                    """,
+                    (article_id, created_at),
+                )
+                bookmarked += 1
+                collected += 1
+                if collected >= max_items_per_keyword:
+                    break
+        conn.commit()
+
+    return {"inserted": inserted, "bookmarked": bookmarked, "keywords": len(keywords)}
 
 
 def crawl_source(source: dict) -> int:
@@ -351,9 +433,10 @@ def _extract_yozm_list_items(soup: BeautifulSoup, start_url: str) -> list[dict]:
 def _extract_iboss_list_items(soup: BeautifulSoup, start_url: str) -> list[dict]:
     items = []
     seen = set()
+    pattern = _iboss_article_pattern(start_url)
     for a in soup.select("a[href]"):
         href = a.get("href", "")
-        if not re.search(r"/ab-\d+-\d+", href):
+        if not pattern.search(href):
             continue
         url = urljoin(start_url, href)
         if url in seen:
@@ -372,6 +455,14 @@ def _extract_iboss_list_items(soup: BeautifulSoup, start_url: str) -> list[dict]
             }
         )
     return items
+
+
+def _iboss_article_pattern(start_url: str) -> re.Pattern:
+    match = re.search(r"/ab-(\d+)", start_url)
+    if match:
+        category = match.group(1)
+        return re.compile(rf"/ab-{category}-\d+")
+    return re.compile(r"/ab-\d+-\d+")
 
 
 def _text_or_alt(tag) -> str:
@@ -475,3 +566,19 @@ def _normalize_start_urls(start_url) -> list[str]:
                 urls.append(url)
         return urls
     return []
+
+
+def _google_news_rss_url(keyword: str) -> str:
+    query = quote_plus(keyword)
+    return f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+
+
+def _normalize_google_news_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        if "url" in qs and qs["url"]:
+            return qs["url"][0]
+    except Exception:
+        return url
+    return url

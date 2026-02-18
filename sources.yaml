@@ -51,3 +51,23 @@ sources:
       pagination: "TBD"
       allow: []
       deny: []
+  - id: keyword_news
+    name: "키워드 뉴스"
+    type: "search"
+    start_url: "google_news"
+    list:
+      item_selector: "rss"
+      link_selector: "link"
+      title_selector: "title"
+      date_selector: "pubDate"
+      author_selector: "TBD"
+      image_selector: "TBD"
+    article:
+      content_selector: "TBD"
+      tags_selector: "TBD"
+      summary_selector: "description"
+      remove_selectors: []
+    rules:
+      pagination: "TBD"
+      allow: []
+      deny: []

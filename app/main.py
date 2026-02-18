@@ -3,16 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, AnyUrl
 
-from .crawler import crawl_source
+from .crawler import crawl_keyword_news, crawl_source
 from .database import get_conn, init_db
 from .source_registry import get_source_by_id, load_sources
 
@@ -29,6 +30,24 @@ _STARTUP_CRAWL_SOURCE_IDS = [
     for s in os.environ.get("STARTUP_CRAWL_SOURCE_IDS", "yozm_it").split(",")
     if s.strip()
 ]
+_DEFAULT_KEYWORDS = [
+    "SSP",
+    "버즈빌",
+    "Chatgpt",
+    "Claude",
+    "생성형AI",
+    "오퍼월",
+    "Offerwall",
+    "광고 상품",
+    "Retention",
+    "Unity",
+    "Admob",
+    "APPLovin",
+    "MAX",
+]
+_KEYWORD_NEWS_DAYS = int(os.environ.get("KEYWORD_NEWS_DAYS", "30"))
+_KEYWORD_NEWS_MAX_ITEMS = int(os.environ.get("KEYWORD_NEWS_MAX_ITEMS", "30"))
+_PRUNE_UNBOOKMARKED_DAYS = int(os.environ.get("PRUNE_UNBOOKMARKED_DAYS", "0"))
 
 
 class ArticleOut(BaseModel):
@@ -61,6 +80,7 @@ class CrawlIn(BaseModel):
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    _ensure_default_keywords()
     sync_result = sync_manual_iboss_articles()
     logger.info(
         "[manual_iboss_sync] loaded=%s inserted=%s path=%s",
@@ -91,10 +111,11 @@ def list_news(limit: int = 50) -> List[ArticleOut]:
             """
             SELECT id, source_id, title, url, summary, image_url, published_at
             FROM articles
+            WHERE source_id IS NULL OR source_id != ?
             ORDER BY published_at DESC, id DESC
             LIMIT ?
             """,
-            (limit,),
+            ("keyword_news", limit),
         )
         rows = cur.fetchall()
     return [
@@ -120,10 +141,11 @@ def home(limit: int = 50) -> str:
             """
             SELECT id, title, url, summary, image_url, published_at, source_id
             FROM articles
+            WHERE source_id IS NULL OR source_id != ?
             ORDER BY published_at DESC, id DESC
             LIMIT ?
             """,
-            (limit,),
+            ("keyword_news", limit),
         )
         rows = cur.fetchall()
 
@@ -302,6 +324,119 @@ def bookmarks(limit: int = 100) -> str:
     """
 
 
+@app.get("/settings", response_class=HTMLResponse)
+def settings() -> str:
+    keywords = _list_keywords()
+    active_rows = []
+    inactive_rows = []
+    for row in keywords:
+        if row["is_active"]:
+            active_rows.append(row)
+        else:
+            inactive_rows.append(row)
+
+    def render_list(rows: List[dict]) -> str:
+        if not rows:
+            return '<p class="empty">등록된 키워드가 없습니다.</p>'
+        items = []
+        for row in rows:
+            items.append(
+                f"""
+                <li class="keyword-item">
+                  <span class="keyword-text">{row["keyword"]}</span>
+                  <form method="post" action="/settings/keyword/{row["id"]}/remove">
+                    <button type="submit">제거</button>
+                  </form>
+                </li>
+                """
+            )
+        return f'<ul class="keyword-list">{"".join(items)}</ul>'
+
+    active_html = render_list(active_rows)
+    inactive_html = render_list(inactive_rows)
+
+    return f"""
+    <html lang="ko">
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>설정</title>
+        <style>
+          { _inline_shared_styles() }
+        </style>
+      </head>
+      <body>
+        <div class="topbar">
+          <ul class="menu">
+            <li><a href="/">수집 기사 목록</a></li>
+            <li><a href="/bookmarks">찜한 기사</a></li>
+            <li class="active">설정</li>
+          </ul>
+        </div>
+        <div class="container">
+          <div class="panel">
+            <h2>키워드 설정</h2>
+            <form class="keyword-form" method="post" action="/settings/keyword">
+              <input type="text" name="keyword" placeholder="키워드를 입력하세요" />
+              <button type="submit">추가</button>
+            </form>
+            <h3>활성 키워드</h3>
+            {active_html}
+            <h3 class="mt">비활성 키워드</h3>
+            {inactive_html}
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+
+@app.post("/settings/keyword")
+def add_keyword(keyword: str = Form(...)) -> RedirectResponse:
+    normalized = _normalize_keyword(keyword)
+    if not normalized:
+        return RedirectResponse(url="/settings", status_code=303)
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO keyword_settings (keyword, keyword_norm, is_active, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(keyword_norm) DO UPDATE SET
+              keyword = excluded.keyword,
+              is_active = 1,
+              updated_at = excluded.updated_at
+            """,
+            (keyword.strip(), normalized, now, now),
+        )
+        conn.commit()
+    return RedirectResponse(url="/settings", status_code=303)
+
+
+@app.post("/settings/keyword/{keyword_id}/remove")
+def remove_keyword(keyword_id: int) -> RedirectResponse:
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT keyword_norm FROM keyword_settings WHERE id = ?",
+            (keyword_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="keyword not found")
+        keyword_norm = row[0]
+        conn.execute(
+            """
+            UPDATE keyword_settings
+            SET is_active = 0, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, keyword_id),
+        )
+        _delete_keyword_articles(conn, keyword_norm)
+        conn.commit()
+    return RedirectResponse(url="/settings", status_code=303)
+
+
 @app.post("/feedback", response_model=FeedbackOut)
 def create_feedback(payload: FeedbackIn) -> FeedbackOut:
     with get_conn() as conn:
@@ -346,6 +481,17 @@ def crawl(payload: CrawlIn) -> dict:
     return {"inserted": count, "source_id": payload.source_id}
 
 
+@app.post("/crawl-keywords")
+def crawl_keywords() -> dict:
+    keywords = _active_keywords()
+    result = crawl_keyword_news(
+        keywords,
+        days=_KEYWORD_NEWS_DAYS,
+        max_items_per_keyword=_KEYWORD_NEWS_MAX_ITEMS,
+    )
+    return result
+
+
 @app.post("/crawl-all")
 def crawl_all() -> dict:
     sources = load_sources()
@@ -370,10 +516,18 @@ def crawl_all() -> dict:
                     "error_type": type(exc).__name__,
                 }
             )
+    keyword_result = crawl_keyword_news(
+        _active_keywords(),
+        days=_KEYWORD_NEWS_DAYS,
+        max_items_per_keyword=_KEYWORD_NEWS_MAX_ITEMS,
+    )
+    results.append({"source_id": "keyword_news", **keyword_result})
+    pruned = _prune_unbookmarked_articles(_PRUNE_UNBOOKMARKED_DAYS)
     return {
         "results": results,
         "failed": failed,
         "ok": len(results) - failed,
+        "pruned": pruned,
     }
 
 
@@ -453,6 +607,116 @@ def sync_startup_sources() -> List[dict]:
     return results
 
 
+def _normalize_keyword(keyword: str) -> str:
+    cleaned = re.sub(r"\s+", " ", keyword.strip())
+    return cleaned.lower()
+
+
+def _ensure_default_keywords() -> None:
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        cur = conn.execute("SELECT COUNT(*) FROM keyword_settings")
+        count = cur.fetchone()[0]
+        if count:
+            return
+        for keyword in _DEFAULT_KEYWORDS:
+            normalized = _normalize_keyword(keyword)
+            if not normalized:
+                continue
+            conn.execute(
+                """
+                INSERT INTO keyword_settings (keyword, keyword_norm, is_active, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(keyword_norm) DO UPDATE SET
+                  keyword = excluded.keyword,
+                  is_active = 1,
+                  updated_at = excluded.updated_at
+                """,
+                (keyword, normalized, now, now),
+            )
+        conn.commit()
+
+
+def _list_keywords() -> List[dict]:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT id, keyword, keyword_norm, is_active, updated_at
+            FROM keyword_settings
+            ORDER BY id ASC
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "id": row[0],
+            "keyword": row[1],
+            "keyword_norm": row[2],
+            "is_active": bool(row[3]),
+            "updated_at": row[4],
+        }
+        for row in rows
+    ]
+
+
+def _active_keywords() -> List[dict]:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT keyword, keyword_norm
+            FROM keyword_settings
+            WHERE is_active = 1
+            ORDER BY id ASC
+            """
+        )
+        rows = cur.fetchall()
+    return [{"keyword": row[0], "keyword_norm": row[1]} for row in rows]
+
+
+def _delete_keyword_articles(conn, keyword_norm: str) -> None:
+    cur = conn.execute(
+        """
+        SELECT id
+        FROM articles
+        WHERE source_id = ? AND keyword_norm = ?
+        """,
+        ("keyword_news", keyword_norm),
+    )
+    ids = [row[0] for row in cur.fetchall()]
+    if ids:
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(
+            f"DELETE FROM bookmarks WHERE article_id IN ({placeholders})",
+            ids,
+        )
+    conn.execute(
+        """
+        DELETE FROM articles
+        WHERE source_id = ? AND keyword_norm = ?
+        """,
+        ("keyword_news", keyword_norm),
+    )
+
+
+def _prune_unbookmarked_articles(days: int) -> int:
+    if days <= 0:
+        return 0
+    cutoff = (datetime.utcnow().date() - timedelta(days=days - 1)).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM articles
+            WHERE id NOT IN (
+              SELECT article_id FROM bookmarks WHERE removed_at IS NULL
+            )
+            AND (published_at IS NULL OR published_at < ?)
+            """,
+            (cutoff,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
 def _source_name_map() -> Dict[str, str]:
     sources = load_sources()
     return {str(s.get("id")): str(s.get("name")) for s in sources if s.get("id") and s.get("name")}
@@ -470,6 +734,8 @@ def _source_logo_url(source_id: Optional[str]) -> Optional[str]:
         return "https://upload.wikimedia.org/wikipedia/commons/9/92/%EC%9A%94%EC%A6%98IT_%EB%A1%9C%EA%B3%A0.png"
     if source_id == "i_boss":
         return "https://cdn.ibos.kr/images/iboss_home_logo.svg"
+    if source_id == "keyword_news":
+        return "https://www.gstatic.com/images/branding/product/1x/googleg_32dp.png"
     return None
 
 
@@ -500,6 +766,8 @@ def _is_recommended(title: str, summary: str, tags: List[str]) -> bool:
 
 
 def _infer_tags(title: str, summary: str, source_id: Optional[str]) -> List[str]:
+    if source_id == "keyword_news":
+        return ["키워드"]
     text = f"{title} {summary}".lower()
     tag_keywords = {
         "기획": ["기획", "plan", "planning", "pm", "po", "roadmap", "strategy", "okr"],
@@ -970,6 +1238,75 @@ def _inline_shared_styles() -> str:
           }
           .empty {
             color: var(--muted);
+          }
+          .panel {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+          }
+          .panel h2 {
+            margin: 0 0 12px;
+            font-size: 18px;
+          }
+          .panel h3 {
+            margin: 20px 0 10px;
+            font-size: 14px;
+            color: var(--muted);
+          }
+          .panel h3.mt {
+            margin-top: 24px;
+          }
+          .keyword-form {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+          }
+          .keyword-form input {
+            flex: 1;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 14px;
+          }
+          .keyword-form button {
+            border: 1px solid var(--border);
+            background: var(--accent);
+            color: #ffffff;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-weight: 700;
+            cursor: pointer;
+          }
+          .keyword-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+          }
+          .keyword-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px 12px;
+            background: #ffffff;
+          }
+          .keyword-text {
+            font-weight: 600;
+          }
+          .keyword-item button {
+            border: 1px solid var(--border);
+            background: #ffffff;
+            color: var(--accent);
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-weight: 600;
+            cursor: pointer;
           }
           @media (max-width: 1024px) {
             .grid {
