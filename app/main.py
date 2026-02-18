@@ -474,18 +474,25 @@ def _source_logo_url(source_id: Optional[str]) -> Optional[str]:
 def _is_recommended(title: str, summary: str, tags: List[str]) -> bool:
     text = f"{title} {summary}".lower()
     pm_keywords = [
+        "기획",
+        "프로덕트",
         "product",
         "pm",
         "po",
+        "로드맵",
         "roadmap",
+        "전략",
         "launch",
         "strategy",
         "okr",
+        "고객",
         "customer",
+        "지표",
         "metric",
+        "실험",
         "experiment",
     ]
-    if any(tag in ["Planning", "Product", "Business", "Trend"] for tag in tags):
+    if any(tag in ["기획", "프로덕트", "비즈니스", "트렌드"] for tag in tags):
         return True
     return any(k in text for k in pm_keywords)
 
@@ -493,21 +500,21 @@ def _is_recommended(title: str, summary: str, tags: List[str]) -> bool:
 def _infer_tags(title: str, summary: str, source_id: Optional[str]) -> List[str]:
     text = f"{title} {summary}".lower()
     tag_keywords = {
-        "Planning": ["plan", "planning", "pm", "po", "roadmap", "strategy", "okr"],
-        "Design": ["ux", "ui", "design", "prototype"],
-        "Engineering": ["dev", "engineering", "code", "backend", "frontend", "api"],
+        "기획": ["기획", "plan", "planning", "pm", "po", "roadmap", "strategy", "okr"],
+        "디자인": ["디자인", "ux", "ui", "design", "prototype"],
+        "개발": ["개발", "dev", "engineering", "code", "backend", "frontend", "api"],
         "AI": ["ai", "llm", "model", "inference", "agent"],
-        "Marketing": ["marketing", "ad", "campaign", "brand", "performance"],
-        "Business": ["business", "b2b", "b2c", "revenue", "growth"],
-        "Product": ["product", "feature", "launch", "retention", "activation"],
-        "Career": ["career", "hiring", "interview", "leadership"],
-        "Trend": ["trend", "market", "outlook", "report"],
-        "Startup": ["startup", "founder", "seed", "venture"],
+        "마케팅": ["마케팅", "marketing", "ad", "campaign", "brand", "performance"],
+        "비즈니스": ["비즈니스", "business", "b2b", "b2c", "revenue", "growth"],
+        "프로덕트": ["프로덕트", "product", "feature", "launch", "retention", "activation"],
+        "커리어": ["커리어", "career", "hiring", "interview", "leadership"],
+        "트렌드": ["트렌드", "trend", "market", "outlook", "report"],
+        "스타트업": ["스타트업", "startup", "founder", "seed", "venture"],
     }
 
     tags: List[str] = []
     if source_id == "i_boss":
-        tags.append("Marketing")
+        tags.append("마케팅")
 
     for tag, keywords in tag_keywords.items():
         if tag in tags:
@@ -518,38 +525,38 @@ def _infer_tags(title: str, summary: str, source_id: Optional[str]) -> List[str]
             break
 
     if not tags:
-        tags.append("Planning")
+        tags.append("기획")
     return tags
 
 
 def _po_pm_trend_items() -> List[Dict[str, str]]:
     return [
         {
-            "title": "Google shares January 2026 AI product updates",
+            "title": "구글, 2026년 1월 AI 제품 업데이트 요약 공개",
             "source": "Google",
             "date": "2026-02-04",
             "url": "https://blog.google/innovation-and-ai/products/google-ai-updates-january-2026/",
         },
         {
-            "title": "Gemini 3 Deep Think update announced",
+            "title": "Gemini 3 Deep Think 업데이트 발표",
             "source": "Google",
             "date": "2026-02-12",
             "url": "https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-deep-think/",
         },
         {
-            "title": "Microsoft 365 Copilot January 2026 updates",
+            "title": "Microsoft 365 Copilot 2026년 1월 업데이트",
             "source": "Microsoft",
             "date": "2026-01-30",
             "url": "https://techcommunity.microsoft.com/blog/microsoft365copilotblog/what%E2%80%99s-new-in-microsoft-365-copilot--january-2026/4488916",
         },
         {
-            "title": "Meta outlines its 2026 AI direction",
+            "title": "Meta, 2026년 AI 방향성 공개",
             "source": "Meta",
             "date": "2026-01-28",
             "url": "https://about.fb.com/news/2026/01/2026-ai-drives-performance/",
         },
         {
-            "title": "Google I/O 2026 dates announced",
+            "title": "Google I/O 2026 일정 공개",
             "source": "Google",
             "date": "2026-02-18",
             "url": "https://www.theverge.com/tech/880401/google-io-2026-dates-ai",
@@ -558,61 +565,61 @@ def _po_pm_trend_items() -> List[Dict[str, str]]:
 def _martech_trend_items() -> List[Dict[str, str]]:
     return [
         {
-            "title": "IAB 2026 Outlook: U.S. ad spend +9.5%, AI priorities accelerate",
+            "title": "IAB 2026 전망: 미국 광고비 9.5% 성장, AI 우선순위 가속",
             "source": "IAB",
             "date": "2026-01-28",
             "url": "https://www.iab.com/news/outlook-study-forecasts-9-5-growth-in-u-s-ad-spend",
         },
         {
-            "title": "IAB Project Eidos announced to modernize ad measurement",
+            "title": "IAB, 광고 측정 현대화를 위한 Project Eidos 발표",
             "source": "IAB",
             "date": "2026-02-02",
             "url": "https://www.iab.com/news/iab-announces-project-eidos",
         },
         {
-            "title": "Google 2026 Ads & Commerce outlook: fluid, assistive, personal experiences",
+            "title": "Google 2026 Ads & Commerce 전망: 유연·보조·개인화 경험",
             "source": "Google",
             "date": "2026-02-11",
             "url": "https://blog.google/products/ads-commerce/digital-advertising-commerce-2026/",
         },
         {
-            "title": "Google Demand Gen January Drop: shoppable CTV and travel feeds",
+            "title": "Google Demand Gen 1월 업데이트: 쇼퍼블 CTV·여행 피드",
             "source": "Google",
             "date": "2026-01-28",
             "url": "https://blog.google/products/ads-commerce/demand-gen-drop-january-2026/",
         },
         {
-            "title": "IAB Tech Lab ECAPI public comment for conversion event standardization",
+            "title": "IAB Tech Lab ECAPI, 전환 이벤트 표준화 공개 의견 수렴",
             "source": "IAB Tech Lab",
             "date": "2026-01-20",
             "url": "https://iabtechlab.com/press-releases/iab-tech-lab-announces-event-and-conversion-api-ecapi-for-public-comment/",
         },
         {
-            "title": "IAB Tech Lab agentic roadmap for interoperable ad execution",
+            "title": "IAB Tech Lab, 상호운용 광고 실행을 위한 에이전틱 로드맵 공개",
             "source": "IAB Tech Lab",
             "date": "2026-01-06",
             "url": "https://iabtechlab.com/press-releases/iab-tech-lab-unveils-agentic-roadmap-for-digital-advertising/",
         },
         {
-            "title": "Amazon Ads Brand+ global GA with AI-powered prospecting",
+            "title": "Amazon Ads Brand+, AI 기반 잠재고객 발굴로 글로벌 출시",
             "source": "Amazon Ads",
             "date": "2026-01-30",
             "url": "https://advertising.amazon.com/en-gb/resources/whats-new/drive-brand-awareness-and-engagement-with-brand-plus",
         },
         {
-            "title": "Amazon DSP adds Podcast Audience Network integration",
+            "title": "Amazon DSP, Podcast Audience Network 연동 추가",
             "source": "Amazon Ads",
             "date": "2026-01-01",
             "url": "https://advertising.amazon.com/resources/whats-new/podcast-audience-network-integration-with-amazon-dsp",
         },
         {
-            "title": "IAB Tech Lab CTV Ad Portfolio released for public comment",
+            "title": "IAB Tech Lab CTV Ad Portfolio 공개 의견 수렴 시작",
             "source": "IAB Tech Lab",
             "date": "2025-12-11",
             "url": "https://iabtechlab.com/press-releases/iab-tech-lab-announces-ctv-ad-portfolio/",
         },
         {
-            "title": "IAB Tech Lab Deals API 1.0 released for programmatic deal sync",
+            "title": "IAB Tech Lab Deals API 1.0 공개, 프로그래매틱 딜 동기화 표준화",
             "source": "IAB Tech Lab",
             "date": "2025-12-04",
             "url": "https://iabtechlab.com/press-releases/iab-tech-lab-releases-deals-api-to-standardize-programmatic-deal-sync/",
