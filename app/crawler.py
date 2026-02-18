@@ -646,7 +646,7 @@ def _iter_naver_news_items(keyword: str) -> Iterable[dict]:
         summary_tag = container.select_one(".dsc_wrap") if container else None
         if summary_tag:
             summary = summary_tag.get_text(" ", strip=True)
-        published_at = _parse_date_text(text)
+        published_at = _parse_date_text(text) or _parse_relative_date(text)
         items.append(
             {
                 "title": title,
@@ -661,6 +661,21 @@ def _iter_naver_news_items(keyword: str) -> Iterable[dict]:
 def _naver_news_search_url(keyword: str) -> str:
     query = quote_plus(keyword)
     return f"https://search.naver.com/search.naver?where=news&query={query}"
+
+
+def _parse_relative_date(text: str) -> Optional[str]:
+    if not text:
+        return None
+    now = date.today()
+    match = re.search(r"(\d+)\s*일\s*전", text)
+    if match:
+        days = int(match.group(1))
+        return (now - timedelta(days=days)).isoformat()
+    if "어제" in text:
+        return (now - timedelta(days=1)).isoformat()
+    if "오늘" in text or "분 전" in text or "시간 전" in text:
+        return now.isoformat()
+    return None
 
 
 def _google_news_rss_url(keyword: str) -> str:

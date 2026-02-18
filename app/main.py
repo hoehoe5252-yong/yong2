@@ -426,6 +426,9 @@ def settings() -> str:
               <input type="text" name="keyword" placeholder="키워드를 입력하세요" />
               <button type="submit">추가</button>
             </form>
+            <form class="keyword-form" method="post" action="/crawl-keywords">
+              <button type="submit">지금 키워드 뉴스 수집</button>
+            </form>
             <h3>활성 키워드</h3>
             {active_html}
             <h3 class="mt">비활성 키워드</h3>
@@ -664,10 +667,6 @@ def _normalize_keyword(keyword: str) -> str:
 def _ensure_default_keywords() -> None:
     now = datetime.utcnow().isoformat()
     with get_conn() as conn:
-        cur = conn.execute("SELECT COUNT(*) FROM keyword_settings")
-        count = cur.fetchone()[0]
-        if count:
-            return
         for keyword in _DEFAULT_KEYWORDS:
             normalized = _normalize_keyword(keyword)
             if not normalized:
