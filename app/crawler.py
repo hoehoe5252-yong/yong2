@@ -1,0 +1,400 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+import re
+from typing import Iterable, Optional, Sequence
+from urllib.parse import urljoin
+
+import feedparser
+import requests
+from bs4 import BeautifulSoup
+
+from .database import get_conn
+
+
+def _parse_published(entry) -> Optional[str]:
+    if getattr(entry, "published_parsed", None):
+        dt = datetime(*entry.published_parsed[:6])
+        return dt.isoformat()
+    if getattr(entry, "updated_parsed", None):
+        dt = datetime(*entry.updated_parsed[:6])
+        return dt.isoformat()
+    return None
+
+
+def _fetch_summary(url: str) -> str:
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return ""
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    meta = soup.find("meta", attrs={"name": "description"})
+    if meta and meta.get("content"):
+        return meta["content"].strip()
+    return ""
+
+
+def _iter_entries(rss_url: str) -> Iterable[object]:
+    feed = feedparser.parse(rss_url)
+    return feed.entries or []
+
+
+def crawl_rss(rss_url: str) -> int:
+    inserted = 0
+    with get_conn() as conn:
+        for entry in _iter_entries(rss_url):
+            title = (getattr(entry, "title", "") or "").strip()
+            url = (getattr(entry, "link", "") or "").strip()
+            if not title or not url:
+                continue
+            summary = (getattr(entry, "summary", "") or "").strip()
+            if not summary:
+                summary = _fetch_summary(url)
+            published_at = _parse_published(entry)
+
+            cur = conn.execute(
+                "SELECT 1 FROM articles WHERE url = ?",
+                (url,),
+            )
+            if cur.fetchone():
+                continue
+            conn.execute(
+                """
+                INSERT INTO articles (title, url, summary, published_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (title, url, summary, published_at),
+            )
+            inserted += 1
+        conn.commit()
+    return inserted
+
+
+def crawl_source(source: dict) -> int:
+    source_id = (source.get("id") or "").strip()
+    start_url = source.get("start_url")
+    start_urls = _normalize_start_urls(start_url)
+    if not source_id or not start_urls:
+        raise ValueError("source must include id and start_url")
+
+    if source_id == "yozm_it":
+        return crawl_yozm_it(start_urls, source_id)
+    if source_id == "i_boss":
+        return crawl_i_boss(start_urls[0], source_id)
+    raise ValueError(f"unsupported source_id: {source_id}")
+
+
+def crawl_yozm_it(start_urls: Sequence[str], source_id: str) -> int:
+    items: list[dict] = []
+    seen = set()
+    for start_url in start_urls:
+        try:
+            html = _fetch_html(start_url)
+        except requests.RequestException:
+            # Skip a list page if the remote host closes the connection.
+            continue
+        soup = BeautifulSoup(html, "html.parser")
+        for item in _extract_yozm_list_items(soup, start_url):
+            url = item.get("url")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            items.append(item)
+
+    inserted = 0
+    today = date.today()
+    max_links = 200
+    with get_conn() as conn:
+        for item in items[:max_links]:
+            url = item["url"]
+            detail = {}
+            title = (item.get("title") or "").strip()
+            summary = (item.get("summary") or "").strip()
+            image_url = (item.get("image_url") or "").strip() or None
+            published_at = item.get("published_at")
+
+            if not published_at or not title or not summary or not image_url:
+                detail = _fetch_yozm_detail(url)
+                title = detail.get("title") or title
+                summary = detail.get("summary") or summary
+                image_url = detail.get("image_url") or image_url
+                published_at = detail.get("published_at") or published_at
+
+            if not title or not url:
+                continue
+            if not _is_within_days(published_at, today, days=30):
+                continue
+            cur = conn.execute("SELECT 1 FROM articles WHERE url = ?", (url,))
+            if cur.fetchone():
+                continue
+            conn.execute(
+                """
+                INSERT INTO articles (source_id, title, url, summary, image_url, published_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (source_id, title, url, summary, image_url, published_at),
+            )
+            inserted += 1
+            if inserted >= 50:
+                break
+        conn.commit()
+    return inserted
+
+
+def crawl_i_boss(start_url: str, source_id: str) -> int:
+    html = _fetch_html(start_url)
+    soup = BeautifulSoup(html, "html.parser")
+
+    items = _extract_iboss_list_items(soup, start_url)
+
+    inserted = 0
+    today = date.today()
+    max_links = 200
+    with get_conn() as conn:
+        for item in items[:max_links]:
+            url = item["url"]
+            detail = {}
+            title = (item.get("title") or "").strip()
+            summary = (item.get("summary") or "").strip()
+            image_url = (item.get("image_url") or "").strip() or None
+            published_at = item.get("published_at")
+
+            if not published_at or not title or not summary or not image_url:
+                detail = _fetch_generic_detail(url)
+                title = detail.get("title") or title
+                summary = detail.get("summary") or summary
+                image_url = detail.get("image_url") or image_url
+                published_at = detail.get("published_at") or published_at
+
+            if not title or not url:
+                continue
+            if not _is_within_days(published_at, today, days=30):
+                continue
+            cur = conn.execute("SELECT 1 FROM articles WHERE url = ?", (url,))
+            if cur.fetchone():
+                continue
+            conn.execute(
+                """
+                INSERT INTO articles (source_id, title, url, summary, image_url, published_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (source_id, title, url, summary, image_url, published_at),
+            )
+            inserted += 1
+            if inserted >= 50:
+                break
+        conn.commit()
+    return inserted
+
+
+def _fetch_html(url: str) -> str:
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; yong2/0.1)"}
+    resp = requests.get(url, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.text
+
+
+def _fetch_yozm_detail(url: str) -> dict:
+    try:
+        html = _fetch_html(url)
+    except requests.RequestException:
+        return {}
+
+    soup = BeautifulSoup(html, "html.parser")
+    title = _meta_content(soup, "og:title") or _meta_content(soup, "twitter:title")
+    summary = _meta_content(soup, "description") or _meta_content(soup, "og:description")
+    image_url = _meta_content(soup, "og:image") or _meta_content(soup, "twitter:image")
+
+    published_at = _extract_date_from_json_ld(soup) or _extract_date_near_title(soup) or _extract_date_anywhere(soup)
+
+    return {
+        "title": (title or "").strip(),
+        "summary": (summary or "").strip(),
+        "image_url": (image_url or "").strip() or None,
+        "published_at": published_at,
+    }
+
+
+def _fetch_generic_detail(url: str) -> dict:
+    try:
+        html = _fetch_html(url)
+    except requests.RequestException:
+        return {}
+    soup = BeautifulSoup(html, "html.parser")
+    title = _meta_content(soup, "og:title") or _meta_content(soup, "twitter:title") or _meta_content(soup, "title")
+    summary = _meta_content(soup, "description") or _meta_content(soup, "og:description")
+    image_url = _meta_content(soup, "og:image") or _meta_content(soup, "twitter:image")
+    published_at = _extract_date_from_json_ld(soup) or _extract_date_near_title(soup) or _extract_date_anywhere(soup)
+    return {
+        "title": (title or "").strip(),
+        "summary": (summary or "").strip(),
+        "image_url": (image_url or "").strip() or None,
+        "published_at": published_at,
+    }
+
+
+def _meta_content(soup: BeautifulSoup, key: str) -> Optional[str]:
+    if key.startswith("og:") or key.startswith("twitter:"):
+        tag = soup.find("meta", property=key)
+    else:
+        tag = soup.find("meta", attrs={"name": key})
+    if tag and tag.get("content"):
+        return tag["content"]
+    return None
+
+
+def _extract_yozm_list_items(soup: BeautifulSoup, start_url: str) -> list[dict]:
+    items = []
+    seen = set()
+    for a in soup.select("a[href]"):
+        href = a.get("href", "")
+        if "/magazine/detail/" not in href:
+            continue
+        url = urljoin(start_url, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = _text_or_alt(a)
+        card = a.find_parent()
+        summary, published_at, image_url = _extract_card_fields(card, start_url)
+        items.append(
+            {
+                "url": url,
+                "title": title,
+                "summary": summary,
+                "image_url": image_url,
+                "published_at": published_at,
+            }
+        )
+    return items
+
+
+def _extract_iboss_list_items(soup: BeautifulSoup, start_url: str) -> list[dict]:
+    items = []
+    seen = set()
+    for a in soup.select("a[href]"):
+        href = a.get("href", "")
+        if not re.search(r"/ab-\d+-\d+", href):
+            continue
+        url = urljoin(start_url, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = _text_or_alt(a)
+        card = a.find_parent()
+        summary, published_at, image_url = _extract_card_fields(card, start_url)
+        items.append(
+            {
+                "url": url,
+                "title": title,
+                "summary": summary,
+                "image_url": image_url,
+                "published_at": published_at,
+            }
+        )
+    return items
+
+
+def _text_or_alt(tag) -> str:
+    text = tag.get_text(" ", strip=True)
+    if text:
+        return text
+    img = tag.find("img")
+    if img and img.get("alt"):
+        return img.get("alt").strip()
+    return ""
+
+
+def _extract_card_fields(card, base_url: str) -> tuple[str, Optional[str], Optional[str]]:
+    if not card:
+        return "", None, None
+    text = card.get_text(" ", strip=True)
+    summary = _first_non_date_sentence(text)
+    published_at = _parse_date_text(text)
+
+    image_url = None
+    img = card.find("img")
+    if img:
+        src = img.get("src") or img.get("data-src") or img.get("data-original")
+        if src:
+            image_url = urljoin(base_url, src)
+    return summary, published_at, image_url
+
+
+def _first_non_date_sentence(text: str) -> str:
+    if not text:
+        return ""
+    parts = [p.strip() for p in re.split(r"[|\u00b7\n]", text) if p.strip()]
+    for part in parts:
+        if _parse_date_text(part):
+            continue
+        if len(part) >= 10:
+            return part
+    return text.strip()
+
+
+def _extract_date_from_json_ld(soup: BeautifulSoup) -> Optional[str]:
+    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = tag.string or ""
+        match = re.search(r'"datePublished"\s*:\s*"([^"]+)"', raw)
+        if not match:
+            continue
+        value = match.group(1)
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return dt.date().isoformat()
+        except ValueError:
+            continue
+    return None
+def _extract_date_near_title(soup: BeautifulSoup) -> Optional[str]:
+    h1 = soup.find("h1")
+    if not h1:
+        return None
+    container = h1.parent or h1
+    text = container.get_text(" ", strip=True)
+    return _parse_date_text(text)
+
+
+def _extract_date_anywhere(soup: BeautifulSoup) -> Optional[str]:
+    text = soup.get_text(" ", strip=True)
+    return _parse_date_text(text)
+
+
+def _parse_date_text(text: str) -> Optional[str]:
+    match = re.search(r"\b(\d{4})\s*\.\s*(\d{2})\s*\.\s*(\d{2})\s*\.?\b", text)
+    if not match:
+        return None
+    dt = datetime.strptime(f"{match.group(1)}.{match.group(2)}.{match.group(3)}", "%Y.%m.%d")
+    return dt.date().isoformat()
+
+
+def _is_within_days(value: Optional[str], today: date, days: int) -> bool:
+    if not value:
+        return False
+    try:
+        published = datetime.fromisoformat(value).date()
+    except ValueError:
+        try:
+            published = datetime.strptime(value, "%Y.%m.%d").date()
+        except ValueError:
+            return False
+    start = today - timedelta(days=days - 1)
+    return start <= published <= today
+
+
+def _normalize_start_urls(start_url) -> list[str]:
+    if isinstance(start_url, str):
+        url = start_url.strip()
+        return [url] if url else []
+    if isinstance(start_url, list):
+        urls = []
+        for value in start_url:
+            if not isinstance(value, str):
+                continue
+            url = value.strip()
+            if url:
+                urls.append(url)
+        return urls
+    return []

@@ -1,0 +1,53 @@
+﻿version: 1
+sources:
+  - id: yozm_it
+    name: "요즘IT"
+    type: "html"
+    start_url:
+      - "https://yozm.wishket.com/magazine/"
+      - "https://yozm.wishket.com/magazine/list/develop/"
+      - "https://yozm.wishket.com/magazine/list/ai/"
+      - "https://yozm.wishket.com/magazine/list/itservice/"
+      - "https://yozm.wishket.com/magazine/list/plan/"
+      - "https://yozm.wishket.com/magazine/list/design/"
+      - "https://yozm.wishket.com/magazine/list/business/"
+      - "https://yozm.wishket.com/magazine/list/startup/"
+      - "https://yozm.wishket.com/magazine/list/trend/"
+      - "https://yozm.wishket.com/magazine/list/career/"
+      - "https://yozm.wishket.com/magazine/list/product/"
+    list:
+      item_selector: "TBD"
+      link_selector: "TBD"
+      title_selector: "TBD"
+      date_selector: "TBD"
+      author_selector: "TBD"
+      image_selector: "TBD"
+    article:
+      content_selector: "TBD"
+      tags_selector: "TBD"
+      summary_selector: "TBD"
+      remove_selectors: []
+    rules:
+      pagination: "TBD"
+      allow: []
+      deny: []
+  - id: i_boss
+    name: "아이보스"
+    type: "html"
+    start_url: "https://www.i-boss.co.kr/ab-74667"
+    list:
+      item_selector: "TBD"
+      link_selector: "a[href*='/ab-']"
+      title_selector: "TBD"
+      date_selector: "TBD"
+      author_selector: "TBD"
+      image_selector: "img"
+    article:
+      content_selector: "TBD"
+      tags_selector: "TBD"
+      summary_selector: "TBD"
+      remove_selectors: []
+    rules:
+      pagination: "TBD"
+      allow: []
+      deny: []
