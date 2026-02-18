@@ -77,3 +77,23 @@
 - 로그인 기능은 인증 방식(JWT/세션), 보호 라우트 범위, 로그인/로그아웃 UX를 먼저 확정한다.
 - 설정 탭은 계정/크롤링/알림/환경설정 섹션으로 IA를 분리해 설계한다.
 - 모바일 노출 조건은 브레이크포인트별 컴포넌트 표시/숨김 규칙으로 문서화한다.
+
+## 운영 전환 메모 (2026-02-18, i-boss)
+- i-boss는 Railway 런타임에서 직접 크롤링하지 않고, 로컬 PC 수집 + 재배포 반영 방식으로 전환.
+- 로컬에서 `data/iboss_manual.json`을 생성/업데이트 후 GitHub push.
+- Railway 자동 배포 시 서버 startup 동기화로 DB 반영.
+
+## 반영된 기능
+- `POST /sync-manual-iboss` 수동 동기화 API 추가.
+- startup 시 `data/iboss_manual.json` 자동 로드/삽입.
+- `/crawl-all`에서 `i_boss`는 `manual_only`로 skip.
+
+## 운영 절차 (Daily)
+1. 로컬에서 i-boss 수집 실행
+2. 결과 파일(`data/iboss_manual.json`) 커밋/푸시
+3. Railway 자동 배포 확인
+4. 로그에서 `[manual_iboss_sync]` 로드/삽입 건수 확인
+
+## 자동화 스크립트
+- `scripts/collect_and_push_iboss.ps1`
+- 실행 예시: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/collect_and_push_iboss.ps1 -Limit 50`
