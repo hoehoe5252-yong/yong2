@@ -309,6 +309,22 @@ def crawl(payload: CrawlIn) -> dict:
     return {"inserted": count, "source_id": payload.source_id}
 
 
+@app.post("/crawl-all")
+def crawl_all() -> dict:
+    sources = load_sources()
+    results = []
+    for source in sources:
+        source_id = str(source.get("id") or "").strip()
+        if not source_id:
+            continue
+        try:
+            count = crawl_source(source)
+            results.append({"source_id": source_id, "inserted": count})
+        except ValueError as exc:
+            results.append({"source_id": source_id, "error": str(exc)})
+    return {"results": results}
+
+
 def _source_name_map() -> Dict[str, str]:
     sources = load_sources()
     return {str(s.get("id")): str(s.get("name")) for s in sources if s.get("id") and s.get("name")}
