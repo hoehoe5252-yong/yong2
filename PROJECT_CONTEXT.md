@@ -97,3 +97,19 @@
 ## 자동화 스크립트
 - `scripts/collect_and_push_iboss.ps1`
 - 실행 예시: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/collect_and_push_iboss.ps1 -Limit 50`
+
+## 업데이트 메모 (2026-02-18, startup source sync)
+- 재배포 직후 DB가 비어 있어도 요즘IT가 보이도록 startup에서 `yozm_it` 자동 크롤링을 추가.
+- 환경변수 `STARTUP_CRAWL_SOURCE_IDS`로 startup 자동 크롤링 대상(source_id 목록) 제어.
+
+## 업데이트 메모 (2026-02-18, UI/모바일/트렌드)
+- 상단 트렌드 바를 2개로 구성:
+  - `MarTech 추천 트렌드` (Ad-Tech/MarTech 최신 10개)
+  - `PO/PM 추천 트렌드` (5개)
+- 트렌드 타이틀 및 카드 태그를 한국어로 표기하도록 정리.
+- MarTech 롤링 속도는 기존 대비 느리게 조정(PO/PM 대비 과속 완화).
+- 모바일 노출 규칙 보강:
+  - `<meta name="viewport">` 추가
+  - `<=768px`에서 카드 그리드 1열 고정(모바일에서 카드 1개씩 노출)
+- startup 자동 동기화:
+  - 재배포 직후 공백을 줄이기 위해 `yozm_it` startup crawl 유지.

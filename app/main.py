@@ -183,6 +183,7 @@ def home(limit: int = 50) -> str:
     return f"""
     <html lang="ko">
       <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>뉴스</title>
         <style>
           { _inline_shared_styles() }
@@ -278,6 +279,7 @@ def bookmarks(limit: int = 100) -> str:
     return f"""
     <html lang="ko">
       <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>북마크</title>
         <style>
           { _inline_shared_styles() }
@@ -978,7 +980,7 @@ def _inline_shared_styles() -> str:
               gap: 6px;
             }
           }
-          @media (max-width: 640px) {
+          @media (max-width: 768px) {
             .grid {
               grid-template-columns: 1fr;
             }
