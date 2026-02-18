@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from http.cookiejar import CookieJar
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -12,10 +13,36 @@ import requests
 from bs4 import BeautifulSoup
 
 
-def fetch_html(url: str, timeout: int = 20) -> str:
+def _load_cookies(path: Path) -> CookieJar:
+    jar = CookieJar()
+    if not path.exists():
+        return jar
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        domain, _, path_value, secure_flag, expires, name, value = parts[:7]
+        cookie = requests.cookies.create_cookie(
+            domain=domain,
+            path=path_value,
+            secure=secure_flag.lower() == "true",
+            expires=int(expires) if expires.isdigit() else None,
+            name=name,
+            value=value,
+        )
+        jar.set_cookie(cookie)
+    return jar
+
+
+def fetch_html(url: str, timeout: int = 20, *, cookies_path: Path | None = None) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (compatible; yong2-local/0.1)"}
     session = requests.Session()
     session.trust_env = False
+    if cookies_path:
+        session.cookies = _load_cookies(cookies_path)
     resp = session.get(
         url,
         headers=headers,
@@ -69,8 +96,8 @@ def extract_links(list_html: str, base_url: str, limit: int) -> list[str]:
     return links
 
 
-def extract_article(url: str) -> dict:
-    html = fetch_html(url)
+def extract_article(url: str, *, cookies_path: Path | None = None) -> dict:
+    html = fetch_html(url, cookies_path=cookies_path)
     soup = BeautifulSoup(html, "html.parser")
 
     title = (
@@ -92,14 +119,14 @@ def extract_article(url: str) -> dict:
     }
 
 
-def run(start_url: str, out_path: Path, limit: int) -> int:
-    list_html = fetch_html(start_url)
+def run(start_url: str, out_path: Path, limit: int, *, cookies_path: Path | None = None) -> int:
+    list_html = fetch_html(start_url, cookies_path=cookies_path)
     links = extract_links(list_html, start_url, limit=limit)
 
     items = []
     for link in links:
         try:
-            item = extract_article(link)
+            item = extract_article(link, cookies_path=cookies_path)
         except Exception:
             continue
         if not item["title"] or not item["url"]:
@@ -122,10 +149,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export i-boss articles to a JSON seed file.")
     parser.add_argument("--start-url", default="https://www.i-boss.co.kr/ab-7214")
     parser.add_argument("--out", default="data/iboss_manual.json")
+    parser.add_argument("--cookies", default="")
     parser.add_argument("--limit", type=int, default=50)
     args = parser.parse_args()
 
-    count = run(args.start_url, Path(args.out), max(1, args.limit))
+    cookies_path = Path(args.cookies) if args.cookies else None
+    count = run(args.start_url, Path(args.out), max(1, args.limit), cookies_path=cookies_path)
     print(f"saved {count} articles -> {args.out}")
 
 

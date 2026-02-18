@@ -115,8 +115,14 @@ def list_news(limit: int = 50) -> List[ArticleOut]:
         cur = conn.execute(
             """
             SELECT id, source_id, title, url, summary, image_url, published_at
-            FROM articles
-            WHERE source_id IS NULL OR source_id != ?
+            FROM (
+              SELECT id, source_id, title, url, summary, image_url, published_at
+              FROM articles
+              WHERE source_id IS NULL OR source_id != ?
+              UNION ALL
+              SELECT id, 'keyword_news' AS source_id, title, url, summary, image_url, published_at
+              FROM keyword_articles
+            )
             ORDER BY published_at DESC, id DESC
             LIMIT ?
             """,
@@ -145,8 +151,14 @@ def home(limit: int = 50) -> str:
         cur = conn.execute(
             """
             SELECT id, title, url, summary, image_url, published_at, source_id
-            FROM articles
-            WHERE source_id IS NULL OR source_id != ?
+            FROM (
+              SELECT id, title, url, summary, image_url, published_at, source_id
+              FROM articles
+              WHERE source_id IS NULL OR source_id != ?
+              UNION ALL
+              SELECT id, title, url, summary, image_url, published_at, 'keyword_news' AS source_id
+              FROM keyword_articles
+            )
             ORDER BY published_at DESC, id DESC
             LIMIT ?
             """,
@@ -162,6 +174,11 @@ def home(limit: int = 50) -> str:
         tags_html = "".join(f'<span class="tag">{tag}</span>' for tag in tags)
         recommended = _is_recommended(title, summary, tags)
         rec_html = '<span class="badge">추천</span>' if recommended else ""
+        bookmark_action = f"/bookmark/{article_id}"
+        bookmark_label = "찜"
+        if source_id == "keyword_news":
+            bookmark_action = f"/keyword-bookmark/{article_id}"
+            bookmark_label = "찜됨"
         remove_action = f"/bookmark/{article_id}/remove"
         if source_id == "keyword_news":
             remove_action = f"/keyword-bookmark/{article_id}/remove"
@@ -195,8 +212,8 @@ def home(limit: int = 50) -> str:
                   <div class="source">{source_label}</div>
                   <div class="date">{published_at or ""}</div>
                 </div>
-                <form class="bookmark" method="post" action="/bookmark/{article_id}">
-                  <button type="submit">찜</button>
+                <form class="bookmark" method="post" action="{bookmark_action}">
+                  <button type="submit">{bookmark_label}</button>
                 </form>
               </header>
               <div class="tags">{tags_html}{rec_html}</div>
@@ -974,6 +991,21 @@ def add_bookmark(article_id: int) -> RedirectResponse:
             ON CONFLICT(article_id) DO UPDATE SET removed_at = NULL
             """,
             (article_id, datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+    return RedirectResponse(url="/bookmarks", status_code=303)
+
+
+@app.post("/keyword-bookmark/{keyword_article_id}")
+def add_keyword_bookmark(keyword_article_id: int) -> RedirectResponse:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO keyword_bookmarks (keyword_article_id, created_at)
+            VALUES (?, ?)
+            ON CONFLICT(keyword_article_id) DO UPDATE SET removed_at = NULL
+            """,
+            (keyword_article_id, datetime.utcnow().isoformat()),
         )
         conn.commit()
     return RedirectResponse(url="/bookmarks", status_code=303)
