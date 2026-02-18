@@ -47,6 +47,11 @@ _DEFAULT_KEYWORDS = [
 ]
 _KEYWORD_NEWS_DAYS = int(os.environ.get("KEYWORD_NEWS_DAYS", "30"))
 _KEYWORD_NEWS_MAX_ITEMS = int(os.environ.get("KEYWORD_NEWS_MAX_ITEMS", "30"))
+_KEYWORD_NEWS_SOURCES = [
+    s.strip()
+    for s in os.environ.get("KEYWORD_NEWS_SOURCES", "google,naver").split(",")
+    if s.strip()
+]
 _PRUNE_UNBOOKMARKED_DAYS = int(os.environ.get("PRUNE_UNBOOKMARKED_DAYS", "0"))
 
 
@@ -157,6 +162,9 @@ def home(limit: int = 50) -> str:
         tags_html = "".join(f'<span class="tag">{tag}</span>' for tag in tags)
         recommended = _is_recommended(title, summary, tags)
         rec_html = '<span class="badge">추천</span>' if recommended else ""
+        remove_action = f"/bookmark/{article_id}/remove"
+        if source_id == "keyword_news":
+            remove_action = f"/keyword-bookmark/{article_id}/remove"
         if logo_url:
             avatar_html = (
                 '<div class="logo-wrap">'
@@ -234,11 +242,33 @@ def bookmarks(limit: int = 100) -> str:
     with get_conn() as conn:
         cur = conn.execute(
             """
-            SELECT a.id, a.title, a.url, a.summary, a.image_url, a.published_at, a.source_id
-            FROM bookmarks b
-            JOIN articles a ON a.id = b.article_id
-            WHERE b.removed_at IS NULL
-            ORDER BY b.created_at DESC
+            SELECT id, title, url, summary, image_url, published_at, source_id
+            FROM (
+              SELECT a.id AS id,
+                     a.title AS title,
+                     a.url AS url,
+                     a.summary AS summary,
+                     a.image_url AS image_url,
+                     a.published_at AS published_at,
+                     a.source_id AS source_id,
+                     b.created_at AS created_at
+              FROM bookmarks b
+              JOIN articles a ON a.id = b.article_id
+              WHERE b.removed_at IS NULL
+              UNION ALL
+              SELECT k.id AS id,
+                     k.title AS title,
+                     k.url AS url,
+                     k.summary AS summary,
+                     k.image_url AS image_url,
+                     k.published_at AS published_at,
+                     'keyword_news' AS source_id,
+                     kb.created_at AS created_at
+              FROM keyword_bookmarks kb
+              JOIN keyword_articles k ON k.id = kb.keyword_article_id
+              WHERE kb.removed_at IS NULL
+            )
+            ORDER BY created_at DESC
             LIMIT ?
             """,
             (limit,),
@@ -283,7 +313,7 @@ def bookmarks(limit: int = 100) -> str:
                   <div class="source">{source_label}</div>
                   <div class="date">{published_at or ""}</div>
                 </div>
-                <form class="bookmark" method="post" action="/bookmark/{article_id}/remove">
+                <form class="bookmark" method="post" action="{remove_action}">
                   <button type="submit">제거</button>
                 </form>
               </header>
@@ -488,6 +518,7 @@ def crawl_keywords() -> dict:
         keywords,
         days=_KEYWORD_NEWS_DAYS,
         max_items_per_keyword=_KEYWORD_NEWS_MAX_ITEMS,
+        sources=_KEYWORD_NEWS_SOURCES,
     )
     return result
 
@@ -520,6 +551,7 @@ def crawl_all() -> dict:
         _active_keywords(),
         days=_KEYWORD_NEWS_DAYS,
         max_items_per_keyword=_KEYWORD_NEWS_MAX_ITEMS,
+        sources=_KEYWORD_NEWS_SOURCES,
     )
     results.append({"source_id": "keyword_news", **keyword_result})
     pruned = _prune_unbookmarked_articles(_PRUNE_UNBOOKMARKED_DAYS)
@@ -677,24 +709,24 @@ def _delete_keyword_articles(conn, keyword_norm: str) -> None:
     cur = conn.execute(
         """
         SELECT id
-        FROM articles
-        WHERE source_id = ? AND keyword_norm = ?
+        FROM keyword_articles
+        WHERE keyword_norm = ?
         """,
-        ("keyword_news", keyword_norm),
+        (keyword_norm,),
     )
     ids = [row[0] for row in cur.fetchall()]
     if ids:
         placeholders = ",".join("?" for _ in ids)
         conn.execute(
-            f"DELETE FROM bookmarks WHERE article_id IN ({placeholders})",
+            f"DELETE FROM keyword_bookmarks WHERE keyword_article_id IN ({placeholders})",
             ids,
         )
     conn.execute(
         """
-        DELETE FROM articles
-        WHERE source_id = ? AND keyword_norm = ?
+        DELETE FROM keyword_articles
+        WHERE keyword_norm = ?
         """,
-        ("keyword_news", keyword_norm),
+        (keyword_norm,),
     )
 
 
@@ -955,6 +987,21 @@ def remove_bookmark(article_id: int) -> RedirectResponse:
             WHERE article_id = ?
             """,
             (datetime.utcnow().isoformat(), article_id),
+        )
+        conn.commit()
+    return RedirectResponse(url="/bookmarks", status_code=303)
+
+
+@app.post("/keyword-bookmark/{keyword_article_id}/remove")
+def remove_keyword_bookmark(keyword_article_id: int) -> RedirectResponse:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE keyword_bookmarks
+            SET removed_at = ?
+            WHERE keyword_article_id = ?
+            """,
+            (datetime.utcnow().isoformat(), keyword_article_id),
         )
         conn.commit()
     return RedirectResponse(url="/bookmarks", status_code=303)

@@ -56,6 +56,31 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS keyword_articles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                keyword_norm TEXT NOT NULL,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL UNIQUE,
+                summary TEXT NOT NULL,
+                image_url TEXT,
+                published_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS keyword_bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword_article_id INTEGER NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                removed_at TEXT,
+                FOREIGN KEY(keyword_article_id) REFERENCES keyword_articles(id)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS keyword_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 keyword TEXT NOT NULL,
@@ -74,6 +99,13 @@ def init_db() -> None:
                 "image_url": "TEXT",
                 "keyword": "TEXT",
                 "keyword_norm": "TEXT",
+            },
+        )
+        _ensure_columns(
+            conn,
+            "bookmarks",
+            {
+                "is_auto": "INTEGER DEFAULT 0",
             },
         )
 

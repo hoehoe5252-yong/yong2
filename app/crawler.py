@@ -82,6 +82,7 @@ def crawl_keyword_news(
     *,
     days: int = 30,
     max_items_per_keyword: int = 30,
+    sources: Sequence[str] | None = None,
 ) -> dict:
     if not keywords:
         return {"inserted": 0, "bookmarked": 0, "keywords": 0}
@@ -90,6 +91,9 @@ def crawl_keyword_news(
     bookmarked = 0
     today = date.today()
     created_at = datetime.utcnow().isoformat()
+    source_set = {s.strip().lower() for s in (sources or []) if s.strip()}
+    if not source_set:
+        source_set = {"google"}
 
     with get_conn() as conn:
         for keyword in keywords:
@@ -97,63 +101,75 @@ def crawl_keyword_news(
             keyword_norm = str(keyword.get("keyword_norm") or "").strip()
             if not raw_keyword or not keyword_norm:
                 continue
-            rss_url = _google_news_rss_url(raw_keyword)
             seen_urls: set[str] = set()
             collected = 0
-            for entry in _iter_entries(rss_url):
-                title = (getattr(entry, "title", "") or "").strip()
-                url = (getattr(entry, "link", "") or "").strip()
-                if not title or not url:
-                    continue
-                url = _normalize_google_news_url(url)
-                if url in seen_urls:
-                    continue
-                seen_urls.add(url)
+            if "google" in source_set:
+                rss_url = _google_news_rss_url(raw_keyword)
+                for entry in _iter_entries(rss_url):
+                    title = (getattr(entry, "title", "") or "").strip()
+                    url = (getattr(entry, "link", "") or "").strip()
+                    if not title or not url:
+                        continue
+                    url = _normalize_google_news_url(url)
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
 
-                published_at = _parse_published(entry)
-                if not _is_within_days(published_at, today, days=days):
-                    continue
-                summary = (getattr(entry, "summary", "") or "").strip()
-                if not summary:
-                    summary = _fetch_summary(url)
+                    published_at = _parse_published(entry)
+                    if not _is_within_days(published_at, today, days=days):
+                        continue
+                    summary = (getattr(entry, "summary", "") or "").strip()
+                    if not summary:
+                        summary = _fetch_summary(url)
 
-                cur = conn.execute("SELECT id FROM articles WHERE url = ?", (url,))
-                row = cur.fetchone()
-                if row:
-                    article_id = row[0]
-                else:
-                    cur = conn.execute(
-                        """
-                        INSERT INTO articles
-                          (source_id, title, url, summary, image_url, published_at, keyword, keyword_norm)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            "keyword_news",
-                            title,
-                            url,
-                            summary or raw_keyword,
-                            None,
-                            published_at,
-                            raw_keyword,
-                            keyword_norm,
-                        ),
+                    keyword_article_id, is_new = _upsert_keyword_article(
+                        conn,
+                        raw_keyword,
+                        keyword_norm,
+                        title,
+                        url,
+                        summary,
+                        published_at,
                     )
-                    article_id = cur.lastrowid
-                    inserted += 1
+                    if is_new:
+                        inserted += 1
+                    _bookmark_keyword_article(conn, keyword_article_id, created_at)
+                    bookmarked += 1
+                    collected += 1
+                    if collected >= max_items_per_keyword:
+                        break
 
-                conn.execute(
-                    """
-                    INSERT INTO bookmarks (article_id, created_at)
-                    VALUES (?, ?)
-                    ON CONFLICT(article_id) DO UPDATE SET removed_at = NULL
-                    """,
-                    (article_id, created_at),
-                )
-                bookmarked += 1
-                collected += 1
-                if collected >= max_items_per_keyword:
-                    break
+            if "naver" in source_set and collected < max_items_per_keyword:
+                for item in _iter_naver_news_items(raw_keyword):
+                    title = (item.get("title") or "").strip()
+                    url = (item.get("url") or "").strip()
+                    if not title or not url:
+                        continue
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    published_at = item.get("published_at")
+                    if not _is_within_days(published_at, today, days=days):
+                        continue
+                    summary = (item.get("summary") or "").strip()
+                    if not summary:
+                        summary = _fetch_summary(url)
+                    keyword_article_id, is_new = _upsert_keyword_article(
+                        conn,
+                        raw_keyword,
+                        keyword_norm,
+                        title,
+                        url,
+                        summary,
+                        published_at,
+                    )
+                    if is_new:
+                        inserted += 1
+                    _bookmark_keyword_article(conn, keyword_article_id, created_at)
+                    bookmarked += 1
+                    collected += 1
+                    if collected >= max_items_per_keyword:
+                        break
         conn.commit()
 
     return {"inserted": inserted, "bookmarked": bookmarked, "keywords": len(keywords)}
@@ -566,6 +582,85 @@ def _normalize_start_urls(start_url) -> list[str]:
                 urls.append(url)
         return urls
     return []
+
+
+def _upsert_keyword_article(
+    conn,
+    keyword: str,
+    keyword_norm: str,
+    title: str,
+    url: str,
+    summary: str,
+    published_at: Optional[str],
+) -> tuple[int, bool]:
+    cur = conn.execute("SELECT id FROM keyword_articles WHERE url = ?", (url,))
+    row = cur.fetchone()
+    if row:
+        return row[0], False
+    cur = conn.execute(
+        """
+        INSERT INTO keyword_articles
+          (keyword, keyword_norm, title, url, summary, image_url, published_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            keyword,
+            keyword_norm,
+            title,
+            url,
+            summary or keyword,
+            None,
+            published_at,
+        ),
+    )
+    return cur.lastrowid, True
+
+
+def _bookmark_keyword_article(conn, keyword_article_id: int, created_at: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO keyword_bookmarks (keyword_article_id, created_at)
+        VALUES (?, ?)
+        ON CONFLICT(keyword_article_id) DO UPDATE SET removed_at = NULL
+        """,
+        (keyword_article_id, created_at),
+    )
+
+
+def _iter_naver_news_items(keyword: str) -> Iterable[dict]:
+    url = _naver_news_search_url(keyword)
+    try:
+        html = _fetch_html(url)
+    except requests.RequestException:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    items: list[dict] = []
+    for a in soup.select("a.news_tit"):
+        href = (a.get("href") or "").strip()
+        title = (a.get("title") or a.get_text(" ", strip=True) or "").strip()
+        if not href or not title:
+            continue
+        container = a.find_parent()
+        text = container.get_text(" ", strip=True) if container else ""
+        summary = ""
+        summary_tag = container.select_one(".dsc_wrap") if container else None
+        if summary_tag:
+            summary = summary_tag.get_text(" ", strip=True)
+        published_at = _parse_date_text(text)
+        items.append(
+            {
+                "title": title,
+                "url": href,
+                "summary": summary,
+                "published_at": published_at,
+            }
+        )
+    return items
+
+
+def _naver_news_search_url(keyword: str) -> str:
+    query = quote_plus(keyword)
+    return f"https://search.naver.com/search.naver?where=news&query={query}"
 
 
 def _google_news_rss_url(keyword: str) -> str:

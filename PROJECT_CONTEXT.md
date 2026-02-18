@@ -126,3 +126,10 @@
   - `KEYWORD_NEWS_DAYS` (기본 30)
   - `KEYWORD_NEWS_MAX_ITEMS` (기본 30)
   - `PRUNE_UNBOOKMARKED_DAYS` (기본 0)
+
+## 업데이트 메모 (2026-02-18, 키워드 뉴스 소스/저장 구조)
+- 키워드 뉴스 소스 확장: Google News RSS + Naver 뉴스 검색 HTML
+  - `KEYWORD_NEWS_SOURCES` 환경변수 추가 (기본 `google,naver`)
+- 키워드 뉴스 저장을 별도 테이블로 분리
+  - `keyword_articles`, `keyword_bookmarks` 추가
+  - 메인 `articles` 테이블에는 저장하지 않음 (메모리 최소화)
