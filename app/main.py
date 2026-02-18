@@ -134,7 +134,7 @@ def home(limit: int = 50) -> str:
         tags = _infer_tags(title, summary, source_id)
         tags_html = "".join(f'<span class="tag">{tag}</span>' for tag in tags)
         recommended = _is_recommended(title, summary, tags)
-        rec_html = '<span class="badge">Recommended</span>' if recommended else ""
+        rec_html = '<span class="badge">추천</span>' if recommended else ""
         if logo_url:
             avatar_html = (
                 '<div class="logo-wrap">'
@@ -166,7 +166,7 @@ def home(limit: int = 50) -> str:
                   <div class="date">{published_at or ""}</div>
                 </div>
                 <form class="bookmark" method="post" action="/bookmark/{article_id}">
-                  <button type="submit">Save</button>
+                  <button type="submit">찜</button>
                 </form>
               </header>
               <div class="tags">{tags_html}{rec_html}</div>
@@ -181,9 +181,9 @@ def home(limit: int = 50) -> str:
 
     body = "\n".join(cards) if cards else "<p class=\"empty\">No articles yet.</p>"
     return f"""
-    <html>
+    <html lang="ko">
       <head>
-        <title>News</title>
+        <title>뉴스</title>
         <style>
           { _inline_shared_styles() }
         </style>
@@ -191,9 +191,9 @@ def home(limit: int = 50) -> str:
       <body>
         <div class="topbar">
           <ul class="menu">
-            <li class="active">News Feed</li>
-            <li><a href="/bookmarks">Bookmarks</a></li>
-            <li>Settings</li>
+            <li class="active">수집 기사 목록</li>
+            <li><a href="/bookmarks">찜한 기사</a></li>
+            <li>설정</li>
           </ul>
         </div>
         <div class="container">
@@ -229,7 +229,7 @@ def bookmarks(limit: int = 100) -> str:
         tags = _infer_tags(title, summary, source_id)
         tags_html = "".join(f'<span class="tag">{tag}</span>' for tag in tags)
         recommended = _is_recommended(title, summary, tags)
-        rec_html = '<span class="badge">Recommended</span>' if recommended else ""
+        rec_html = '<span class="badge">추천</span>' if recommended else ""
         if logo_url:
             avatar_html = (
                 '<div class="logo-wrap">'
@@ -261,7 +261,7 @@ def bookmarks(limit: int = 100) -> str:
                   <div class="date">{published_at or ""}</div>
                 </div>
                 <form class="bookmark" method="post" action="/bookmark/{article_id}/remove">
-                  <button type="submit">Remove</button>
+                  <button type="submit">제거</button>
                 </form>
               </header>
               <div class="tags">{tags_html}{rec_html}</div>
@@ -276,9 +276,9 @@ def bookmarks(limit: int = 100) -> str:
 
     body = "\n".join(cards) if cards else "<p class=\"empty\">No bookmarks yet.</p>"
     return f"""
-    <html>
+    <html lang="ko">
       <head>
-        <title>Bookmarks</title>
+        <title>북마크</title>
         <style>
           { _inline_shared_styles() }
         </style>
@@ -286,9 +286,9 @@ def bookmarks(limit: int = 100) -> str:
       <body>
         <div class="topbar">
           <ul class="menu">
-            <li><a href="/">News Feed</a></li>
-            <li class="active">Bookmarks</li>
-            <li>Settings</li>
+            <li><a href="/">수집 기사 목록</a></li>
+            <li class="active">찜한 기사</li>
+            <li>설정</li>
           </ul>
         </div>
         <div class="container">
@@ -618,7 +618,12 @@ def _martech_trend_items() -> List[Dict[str, str]]:
             "url": "https://iabtechlab.com/press-releases/iab-tech-lab-releases-deals-api-to-standardize-programmatic-deal-sync/",
         },
     ]
-def _render_trend_bar(label: str, items: List[Dict[str, str]], limit: int = 5) -> str:
+def _render_trend_bar(
+    label: str,
+    items: List[Dict[str, str]],
+    limit: int = 5,
+    track_class: str = "",
+) -> str:
     rows = []
     for item in items[:limit]:
         rows.append(
@@ -634,7 +639,7 @@ def _render_trend_bar(label: str, items: List[Dict[str, str]], limit: int = 5) -
       <div class="trend">
         <div class="trend__label">{label}</div>
         <div class="trend__viewport">
-          <ul class="trend__track">
+          <ul class="trend__track {track_class}">
             {body}
             {body}
           </ul>
@@ -642,8 +647,13 @@ def _render_trend_bar(label: str, items: List[Dict[str, str]], limit: int = 5) -
       </div>
     """
 def _render_trend_bars() -> str:
-    martech_html = _render_trend_bar("MarTech Recommended Trends", _martech_trend_items(), limit=10)
-    po_pm_html = _render_trend_bar("PO/PM Recommended Trends", _po_pm_trend_items(), limit=5)
+    martech_html = _render_trend_bar(
+        "MarTech 추천 트렌드",
+        _martech_trend_items(),
+        limit=10,
+        track_class="trend__track--martech",
+    )
+    po_pm_html = _render_trend_bar("PO/PM 추천 트렌드", _po_pm_trend_items(), limit=5)
     return f"{martech_html}\n{po_pm_html}"
 @app.post("/bookmark/{article_id}")
 def add_bookmark(article_id: int) -> RedirectResponse:
@@ -752,6 +762,9 @@ def _inline_shared_styles() -> str:
             gap: 24px;
             width: max-content;
             animation: trend-scroll 28s linear infinite;
+          }
+          .trend__track--martech {
+            animation-duration: 56s;
           }
           .trend__item {
             display: inline-flex;
