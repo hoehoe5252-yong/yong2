@@ -24,6 +24,11 @@ _MANUAL_IBOSS_PATH = Path(
     os.environ.get("MANUAL_IBOSS_PATH", str(_ROOT / "data" / "iboss_manual.json"))
 )
 _IBOSS_MANUAL_ONLY = os.environ.get("IBOSS_MANUAL_ONLY", "1") == "1"
+_STARTUP_CRAWL_SOURCE_IDS = [
+    s.strip()
+    for s in os.environ.get("STARTUP_CRAWL_SOURCE_IDS", "yozm_it").split(",")
+    if s.strip()
+]
 
 
 class ArticleOut(BaseModel):
@@ -63,6 +68,19 @@ def on_startup() -> None:
         sync_result["inserted"],
         sync_result["path"],
     )
+    for result in sync_startup_sources():
+        if result.get("error"):
+            logger.warning(
+                "[startup_source_sync_failed] source_id=%s error=%s",
+                result.get("source_id"),
+                result.get("error"),
+            )
+            continue
+        logger.info(
+            "[startup_source_sync] source_id=%s inserted=%s",
+            result.get("source_id"),
+            result.get("inserted", 0),
+        )
 
 
 @app.get("/news", response_model=List[ArticleOut])
@@ -116,7 +134,7 @@ def home(limit: int = 50) -> str:
         tags = _infer_tags(title, summary, source_id)
         tags_html = "".join(f'<span class="tag">{tag}</span>' for tag in tags)
         recommended = _is_recommended(title, summary, tags)
-        rec_html = '<span class="badge">추천</span>' if recommended else ""
+        rec_html = '<span class="badge">Recommended</span>' if recommended else ""
         if logo_url:
             avatar_html = (
                 '<div class="logo-wrap">'
@@ -148,7 +166,7 @@ def home(limit: int = 50) -> str:
                   <div class="date">{published_at or ""}</div>
                 </div>
                 <form class="bookmark" method="post" action="/bookmark/{article_id}">
-                  <button type="submit">찜</button>
+                  <button type="submit">Save</button>
                 </form>
               </header>
               <div class="tags">{tags_html}{rec_html}</div>
@@ -173,13 +191,13 @@ def home(limit: int = 50) -> str:
       <body>
         <div class="topbar">
           <ul class="menu">
-            <li class="active">수집 기사 목록</li>
-            <li><a href="/bookmarks">찜한 기사</a></li>
-            <li>설정</li>
+            <li class="active">News Feed</li>
+            <li><a href="/bookmarks">Bookmarks</a></li>
+            <li>Settings</li>
           </ul>
         </div>
         <div class="container">
-          { _render_trend_bar() }
+          { _render_trend_bars() }
           <div class="grid">{body}</div>
         </div>
       </body>
@@ -211,7 +229,7 @@ def bookmarks(limit: int = 100) -> str:
         tags = _infer_tags(title, summary, source_id)
         tags_html = "".join(f'<span class="tag">{tag}</span>' for tag in tags)
         recommended = _is_recommended(title, summary, tags)
-        rec_html = '<span class="badge">추천</span>' if recommended else ""
+        rec_html = '<span class="badge">Recommended</span>' if recommended else ""
         if logo_url:
             avatar_html = (
                 '<div class="logo-wrap">'
@@ -243,7 +261,7 @@ def bookmarks(limit: int = 100) -> str:
                   <div class="date">{published_at or ""}</div>
                 </div>
                 <form class="bookmark" method="post" action="/bookmark/{article_id}/remove">
-                  <button type="submit">제거</button>
+                  <button type="submit">Remove</button>
                 </form>
               </header>
               <div class="tags">{tags_html}{rec_html}</div>
@@ -268,13 +286,13 @@ def bookmarks(limit: int = 100) -> str:
       <body>
         <div class="topbar">
           <ul class="menu">
-            <li><a href="/">수집 기사 목록</a></li>
-            <li class="active">찜한 기사</li>
-            <li>설정</li>
+            <li><a href="/">News Feed</a></li>
+            <li class="active">Bookmarks</li>
+            <li>Settings</li>
           </ul>
         </div>
         <div class="container">
-          { _render_trend_bar() }
+          { _render_trend_bars() }
           <div class="grid">{body}</div>
         </div>
       </body>
@@ -410,6 +428,29 @@ def sync_manual_iboss_articles() -> dict:
     return {"path": str(path), "loaded": loaded, "inserted": inserted}
 
 
+def sync_startup_sources() -> List[dict]:
+    if not _STARTUP_CRAWL_SOURCE_IDS:
+        return []
+    results: List[dict] = []
+    for source_id in _STARTUP_CRAWL_SOURCE_IDS:
+        if source_id == "i_boss" and _IBOSS_MANUAL_ONLY:
+            results.append({"source_id": source_id, "skipped": "manual_only"})
+            continue
+        try:
+            source = get_source_by_id(source_id)
+            inserted = crawl_source(source)
+            results.append({"source_id": source_id, "inserted": inserted})
+        except Exception as exc:
+            results.append(
+                {
+                    "source_id": source_id,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
+    return results
+
+
 def _source_name_map() -> Dict[str, str]:
     sources = load_sources()
     return {str(s.get("id")): str(s.get("name")) for s in sources if s.get("id") and s.get("name")}
@@ -433,22 +474,18 @@ def _source_logo_url(source_id: Optional[str]) -> Optional[str]:
 def _is_recommended(title: str, summary: str, tags: List[str]) -> bool:
     text = f"{title} {summary}".lower()
     pm_keywords = [
-        "기획",
-        "프로덕트",
         "product",
         "pm",
         "po",
-        "로드맵",
-        "전략",
-        "지표",
+        "roadmap",
+        "launch",
+        "strategy",
         "okr",
-        "실험",
-        "가설",
-        "우선순위",
-        "고객",
-        "문제정의",
+        "customer",
+        "metric",
+        "experiment",
     ]
-    if any(tag in ["기획", "프로덕트", "비즈니스", "트렌드"] for tag in tags):
+    if any(tag in ["Planning", "Product", "Business", "Trend"] for tag in tags):
         return True
     return any(k in text for k in pm_keywords)
 
@@ -456,86 +493,146 @@ def _is_recommended(title: str, summary: str, tags: List[str]) -> bool:
 def _infer_tags(title: str, summary: str, source_id: Optional[str]) -> List[str]:
     text = f"{title} {summary}".lower()
     tag_keywords = {
-        "기획": ["기획", "pm", "po", "전략", "서비스 기획", "프로덕트 기획"],
-        "디자인": ["디자인", "ux", "ui", "브랜딩", "그래픽"],
-        "개발": ["개발", "엔지니어", "코드", "프로그래밍", "백엔드", "프론트", "dev"],
-        "AI": ["ai", "인공지능", "머신러닝", "llm", "모델"],
-        "마케팅": ["마케팅", "광고", "캠페인", "브랜드", "퍼포먼스"],
-        "비즈니스": ["비즈니스", "사업", "매출", "b2b", "b2c"],
-        "프로덕트": ["프로덕트", "제품", "서비스", "기능"],
-        "커리어": ["커리어", "이직", "채용", "면접", "조직", "리더십"],
-        "트렌드": ["트렌드", "시장", "동향", "리포트"],
-        "스타트업": ["스타트업", "창업", "투자"],
+        "Planning": ["plan", "planning", "pm", "po", "roadmap", "strategy", "okr"],
+        "Design": ["ux", "ui", "design", "prototype"],
+        "Engineering": ["dev", "engineering", "code", "backend", "frontend", "api"],
+        "AI": ["ai", "llm", "model", "inference", "agent"],
+        "Marketing": ["marketing", "ad", "campaign", "brand", "performance"],
+        "Business": ["business", "b2b", "b2c", "revenue", "growth"],
+        "Product": ["product", "feature", "launch", "retention", "activation"],
+        "Career": ["career", "hiring", "interview", "leadership"],
+        "Trend": ["trend", "market", "outlook", "report"],
+        "Startup": ["startup", "founder", "seed", "venture"],
     }
 
     tags: List[str] = []
     if source_id == "i_boss":
-        tags.append("마케팅")
+        tags.append("Marketing")
 
     for tag, keywords in tag_keywords.items():
         if tag in tags:
             continue
-        if any(k.lower() in text for k in keywords):
+        if any(k in text for k in keywords):
             tags.append(tag)
         if len(tags) >= 3:
             break
 
     if not tags:
-        tags.append("기획")
+        tags.append("Planning")
     return tags
 
 
-def _sidebar_items() -> List[Dict[str, str]]:
+def _po_pm_trend_items() -> List[Dict[str, str]]:
     return [
         {
-            "title": "Google, 1월 AI 업데이트 요약 공개",
+            "title": "Google shares January 2026 AI product updates",
             "source": "Google",
             "date": "2026-02-04",
             "url": "https://blog.google/innovation-and-ai/products/google-ai-updates-january-2026/",
         },
         {
-            "title": "Gemini 3 Deep Think 업데이트 공개",
+            "title": "Gemini 3 Deep Think update announced",
             "source": "Google",
             "date": "2026-02-12",
             "url": "https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-deep-think/",
         },
         {
-            "title": "Microsoft 365 Copilot 1월 업데이트",
+            "title": "Microsoft 365 Copilot January 2026 updates",
             "source": "Microsoft",
             "date": "2026-01-30",
             "url": "https://techcommunity.microsoft.com/blog/microsoft365copilotblog/what%E2%80%99s-new-in-microsoft-365-copilot--january-2026/4488916",
         },
         {
-            "title": "Meta, 2026년 AI 성과 방향성 공개",
+            "title": "Meta outlines its 2026 AI direction",
             "source": "Meta",
             "date": "2026-01-28",
             "url": "https://about.fb.com/news/2026/01/2026-ai-drives-performance/",
         },
         {
-            "title": "Google I/O 2026 날짜 공개",
+            "title": "Google I/O 2026 dates announced",
             "source": "Google",
             "date": "2026-02-18",
             "url": "https://www.theverge.com/tech/880401/google-io-2026-dates-ai",
         },
     ]
-
-
-def _render_trend_bar() -> str:
-    items = _sidebar_items()
+def _martech_trend_items() -> List[Dict[str, str]]:
+    return [
+        {
+            "title": "IAB 2026 Outlook: U.S. ad spend +9.5%, AI priorities accelerate",
+            "source": "IAB",
+            "date": "2026-01-28",
+            "url": "https://www.iab.com/news/outlook-study-forecasts-9-5-growth-in-u-s-ad-spend",
+        },
+        {
+            "title": "IAB Project Eidos announced to modernize ad measurement",
+            "source": "IAB",
+            "date": "2026-02-02",
+            "url": "https://www.iab.com/news/iab-announces-project-eidos",
+        },
+        {
+            "title": "Google 2026 Ads & Commerce outlook: fluid, assistive, personal experiences",
+            "source": "Google",
+            "date": "2026-02-11",
+            "url": "https://blog.google/products/ads-commerce/digital-advertising-commerce-2026/",
+        },
+        {
+            "title": "Google Demand Gen January Drop: shoppable CTV and travel feeds",
+            "source": "Google",
+            "date": "2026-01-28",
+            "url": "https://blog.google/products/ads-commerce/demand-gen-drop-january-2026/",
+        },
+        {
+            "title": "IAB Tech Lab ECAPI public comment for conversion event standardization",
+            "source": "IAB Tech Lab",
+            "date": "2026-01-20",
+            "url": "https://iabtechlab.com/press-releases/iab-tech-lab-announces-event-and-conversion-api-ecapi-for-public-comment/",
+        },
+        {
+            "title": "IAB Tech Lab agentic roadmap for interoperable ad execution",
+            "source": "IAB Tech Lab",
+            "date": "2026-01-06",
+            "url": "https://iabtechlab.com/press-releases/iab-tech-lab-unveils-agentic-roadmap-for-digital-advertising/",
+        },
+        {
+            "title": "Amazon Ads Brand+ global GA with AI-powered prospecting",
+            "source": "Amazon Ads",
+            "date": "2026-01-30",
+            "url": "https://advertising.amazon.com/en-gb/resources/whats-new/drive-brand-awareness-and-engagement-with-brand-plus",
+        },
+        {
+            "title": "Amazon DSP adds Podcast Audience Network integration",
+            "source": "Amazon Ads",
+            "date": "2026-01-01",
+            "url": "https://advertising.amazon.com/resources/whats-new/podcast-audience-network-integration-with-amazon-dsp",
+        },
+        {
+            "title": "IAB Tech Lab CTV Ad Portfolio released for public comment",
+            "source": "IAB Tech Lab",
+            "date": "2025-12-11",
+            "url": "https://iabtechlab.com/press-releases/iab-tech-lab-announces-ctv-ad-portfolio/",
+        },
+        {
+            "title": "IAB Tech Lab Deals API 1.0 released for programmatic deal sync",
+            "source": "IAB Tech Lab",
+            "date": "2025-12-04",
+            "url": "https://iabtechlab.com/press-releases/iab-tech-lab-releases-deals-api-to-standardize-programmatic-deal-sync/",
+        },
+    ]
+def _render_trend_bar(label: str, items: List[Dict[str, str]], limit: int = 5) -> str:
     rows = []
-    for item in items[:5]:
+    for item in items[:limit]:
         rows.append(
             f"""
             <li class="trend__item">
-              <span class="trend__meta">{item["source"]} · {item["date"]}</span>
+              <span class="trend__meta">{item["source"]} | {item["date"]}</span>
               <a href="{item["url"]}" target="_blank" rel="noopener noreferrer">{item["title"]}</a>
             </li>
             """
         )
-    body = "\n".join(rows) if rows else "<li class=\"trend__item\">No items</li>"
+    body = "\n".join(rows) if rows else '<li class="trend__item">No items</li>'
     return f"""
       <div class="trend">
-        <div class="trend__label">PO/PM 추천 트렌드</div>
+        <div class="trend__label">{label}</div>
         <div class="trend__viewport">
           <ul class="trend__track">
             {body}
@@ -544,8 +641,10 @@ def _render_trend_bar() -> str:
         </div>
       </div>
     """
-
-
+def _render_trend_bars() -> str:
+    martech_html = _render_trend_bar("MarTech Recommended Trends", _martech_trend_items(), limit=10)
+    po_pm_html = _render_trend_bar("PO/PM Recommended Trends", _po_pm_trend_items(), limit=5)
+    return f"{martech_html}\n{po_pm_html}"
 @app.post("/bookmark/{article_id}")
 def add_bookmark(article_id: int) -> RedirectResponse:
     with get_conn() as conn:
@@ -559,8 +658,6 @@ def add_bookmark(article_id: int) -> RedirectResponse:
         )
         conn.commit()
     return RedirectResponse(url="/bookmarks", status_code=303)
-
-
 @app.post("/bookmark/{article_id}/remove")
 def remove_bookmark(article_id: int) -> RedirectResponse:
     with get_conn() as conn:
@@ -574,8 +671,6 @@ def remove_bookmark(article_id: int) -> RedirectResponse:
         )
         conn.commit()
     return RedirectResponse(url="/bookmarks", status_code=303)
-
-
 def _inline_shared_styles() -> str:
     return """
           :root {
@@ -869,3 +964,4 @@ def _inline_shared_styles() -> str:
             }
           }
     """
+
