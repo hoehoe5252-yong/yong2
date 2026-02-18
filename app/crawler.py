@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 import logging
+import os
 import re
 import time
 from typing import Iterable, Optional, Sequence
@@ -209,19 +210,36 @@ def _fetch_html_with_retry(
     backoff_seconds: float = 1.0,
 ) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (compatible; yong2/0.1)"}
+    use_proxy = source_id == "i_boss" and bool(os.getenv("SCRAPINGBEE_API_KEY", "").strip())
+    proxy_url = os.getenv("SCRAPINGBEE_API_URL", "https://app.scrapingbee.com/api/v1/")
     for attempt in range(1, attempts + 1):
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            if use_proxy:
+                resp = requests.get(
+                    proxy_url,
+                    params={
+                        "api_key": os.getenv("SCRAPINGBEE_API_KEY", "").strip(),
+                        "url": url,
+                        "render_js": "false",
+                        "premium_proxy": "true",
+                        "country_code": "kr",
+                    },
+                    headers=headers,
+                    timeout=20,
+                )
+            else:
+                resp = requests.get(url, headers=headers, timeout=10)
             resp.raise_for_status()
             return resp.text
         except requests.RequestException as exc:
             logger.warning(
-                "[crawl_retry] source=%s stage=%s attempt=%s/%s url=%s error=%s",
+                "[crawl_retry] source=%s stage=%s attempt=%s/%s url=%s proxy=%s error=%s",
                 source_id,
                 stage,
                 attempt,
                 attempts,
                 url,
+                use_proxy,
                 repr(exc),
             )
             if attempt == attempts:

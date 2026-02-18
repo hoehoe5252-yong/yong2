@@ -34,7 +34,7 @@ sources:
   - id: i_boss
     name: "아이보스"
     type: "html"
-    start_url: "https://www.i-boss.co.kr/ab-74667"
+    start_url: "https://www.i-boss.co.kr/ab-7214"
     list:
       item_selector: "TBD"
       link_selector: "a[href*='/ab-']"
