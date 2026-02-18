@@ -313,6 +313,7 @@ def crawl(payload: CrawlIn) -> dict:
 def crawl_all() -> dict:
     sources = load_sources()
     results = []
+    failed = 0
     for source in sources:
         source_id = str(source.get("id") or "").strip()
         if not source_id:
@@ -320,9 +321,20 @@ def crawl_all() -> dict:
         try:
             count = crawl_source(source)
             results.append({"source_id": source_id, "inserted": count})
-        except ValueError as exc:
-            results.append({"source_id": source_id, "error": str(exc)})
-    return {"results": results}
+        except Exception as exc:
+            failed += 1
+            results.append(
+                {
+                    "source_id": source_id,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
+    return {
+        "results": results,
+        "failed": failed,
+        "ok": len(results) - failed,
+    }
 
 
 def _source_name_map() -> Dict[str, str]:

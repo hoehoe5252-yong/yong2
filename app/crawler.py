@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import logging
 import re
+import time
 from typing import Iterable, Optional, Sequence
 from urllib.parse import urljoin
 
@@ -10,6 +12,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from .database import get_conn
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_published(entry) -> Optional[str]:
@@ -144,7 +148,7 @@ def crawl_yozm_it(start_urls: Sequence[str], source_id: str) -> int:
 
 
 def crawl_i_boss(start_url: str, source_id: str) -> int:
-    html = _fetch_html(start_url)
+    html = _fetch_html_with_retry(start_url, source_id=source_id, stage="list", attempts=3)
     soup = BeautifulSoup(html, "html.parser")
 
     items = _extract_iboss_list_items(soup, start_url)
@@ -162,7 +166,7 @@ def crawl_i_boss(start_url: str, source_id: str) -> int:
             published_at = item.get("published_at")
 
             if not published_at or not title or not summary or not image_url:
-                detail = _fetch_generic_detail(url)
+                detail = _fetch_generic_detail_with_retry(url, source_id=source_id)
                 title = detail.get("title") or title
                 summary = detail.get("summary") or summary
                 image_url = detail.get("image_url") or image_url
@@ -196,6 +200,42 @@ def _fetch_html(url: str) -> str:
     return resp.text
 
 
+def _fetch_html_with_retry(
+    url: str,
+    *,
+    source_id: str,
+    stage: str,
+    attempts: int = 3,
+    backoff_seconds: float = 1.0,
+) -> str:
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; yong2/0.1)"}
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return resp.text
+        except requests.RequestException as exc:
+            logger.warning(
+                "[crawl_retry] source=%s stage=%s attempt=%s/%s url=%s error=%s",
+                source_id,
+                stage,
+                attempt,
+                attempts,
+                url,
+                repr(exc),
+            )
+            if attempt == attempts:
+                logger.error(
+                    "[crawl_fail] source=%s stage=%s url=%s attempts=%s",
+                    source_id,
+                    stage,
+                    url,
+                    attempts,
+                )
+                raise
+            time.sleep(backoff_seconds * attempt)
+
+
 def _fetch_yozm_detail(url: str) -> dict:
     try:
         html = _fetch_html(url)
@@ -222,6 +262,25 @@ def _fetch_generic_detail(url: str) -> dict:
         html = _fetch_html(url)
     except requests.RequestException:
         return {}
+    soup = BeautifulSoup(html, "html.parser")
+    title = _meta_content(soup, "og:title") or _meta_content(soup, "twitter:title") or _meta_content(soup, "title")
+    summary = _meta_content(soup, "description") or _meta_content(soup, "og:description")
+    image_url = _meta_content(soup, "og:image") or _meta_content(soup, "twitter:image")
+    published_at = _extract_date_from_json_ld(soup) or _extract_date_near_title(soup) or _extract_date_anywhere(soup)
+    return {
+        "title": (title or "").strip(),
+        "summary": (summary or "").strip(),
+        "image_url": (image_url or "").strip() or None,
+        "published_at": published_at,
+    }
+
+
+def _fetch_generic_detail_with_retry(url: str, *, source_id: str) -> dict:
+    try:
+        html = _fetch_html_with_retry(url, source_id=source_id, stage="detail", attempts=3)
+    except requests.RequestException:
+        return {}
+
     soup = BeautifulSoup(html, "html.parser")
     title = _meta_content(soup, "og:title") or _meta_content(soup, "twitter:title") or _meta_content(soup, "title")
     summary = _meta_content(soup, "description") or _meta_content(soup, "og:description")
