@@ -111,24 +111,7 @@ def on_startup() -> None:
 @app.get("/news", response_model=List[ArticleOut])
 def list_news(limit: int = 50) -> List[ArticleOut]:
     source_names = _source_name_map()
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            SELECT id, source_id, title, url, summary, image_url, published_at
-            FROM (
-              SELECT id, source_id, title, url, summary, image_url, published_at
-              FROM articles
-              WHERE source_id IS NULL OR source_id != ?
-              UNION ALL
-              SELECT id, 'keyword_news' AS source_id, title, url, summary, image_url, published_at
-              FROM keyword_articles
-            )
-            ORDER BY published_at DESC, id DESC
-            LIMIT ?
-            """,
-            ("keyword_news", limit),
-        )
-        rows = cur.fetchall()
+    rows = _fetch_feed_rows(limit)
     return [
         ArticleOut(
             id=row[0],
@@ -147,27 +130,10 @@ def list_news(limit: int = 50) -> List[ArticleOut]:
 @app.get("/", response_class=HTMLResponse)
 def home(limit: int = 50) -> str:
     source_names = _source_name_map()
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            SELECT id, title, url, summary, image_url, published_at, source_id
-            FROM (
-              SELECT id, title, url, summary, image_url, published_at, source_id
-              FROM articles
-              WHERE source_id IS NULL OR source_id != ?
-              UNION ALL
-              SELECT id, title, url, summary, image_url, published_at, 'keyword_news' AS source_id
-              FROM keyword_articles
-            )
-            ORDER BY published_at DESC, id DESC
-            LIMIT ?
-            """,
-            ("keyword_news", limit),
-        )
-        rows = cur.fetchall()
+    rows = _fetch_feed_rows(limit)
 
     cards = []
-    for article_id, title, url, summary, image_url, published_at, source_id in rows:
+    for article_id, source_id, title, url, summary, image_url, published_at in rows:
         source_label = _display_source_name(source_id, url, source_names)
         logo_url = _source_logo_url(source_id)
         tags = _infer_tags(title, summary, source_id)
@@ -783,6 +749,70 @@ def _prune_unbookmarked_articles(days: int) -> int:
 def _source_name_map() -> Dict[str, str]:
     sources = load_sources()
     return {str(s.get("id")): str(s.get("name")) for s in sources if s.get("id") and s.get("name")}
+
+
+def _fetch_feed_rows(limit: int = 50) -> List[tuple]:
+    per_source_caps = {
+        "yozm_it": 3,
+        "i_boss": 3,
+        "keyword_news": 3,
+    }
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT id, source_id, title, url, summary, image_url, published_at
+            FROM articles
+            WHERE source_id IS NULL OR source_id != ?
+            ORDER BY published_at DESC, id DESC
+            LIMIT 200
+            """,
+            ("keyword_news",),
+        )
+        article_rows = cur.fetchall()
+        cur = conn.execute(
+            """
+            SELECT id, 'keyword_news' AS source_id, title, url, summary, image_url, published_at
+            FROM keyword_articles
+            ORDER BY published_at DESC, id DESC
+            LIMIT 200
+            """
+        )
+        keyword_rows = cur.fetchall()
+
+    combined = list(article_rows) + list(keyword_rows)
+    combined.sort(key=lambda r: (r[6] or "", r[0]), reverse=True)
+
+    selected: list[tuple] = []
+    counts = {k: 0 for k in per_source_caps}
+    seen_ids: set[tuple] = set()
+
+    def _pick(row: tuple) -> None:
+        key = (row[1], row[0])
+        if key in seen_ids:
+            return
+        seen_ids.add(key)
+        selected.append(row)
+
+    for row in combined:
+        source_id = row[1]
+        if source_id in per_source_caps and counts[source_id] >= per_source_caps[source_id]:
+            continue
+        if source_id in per_source_caps:
+            counts[source_id] += 1
+        _pick(row)
+        if len(selected) >= limit:
+            return selected
+
+    if len(selected) < limit:
+        for row in combined:
+            key = (row[1], row[0])
+            if key in seen_ids:
+                continue
+            _pick(row)
+            if len(selected) >= limit:
+                break
+
+    return selected
 
 
 def _display_source_name(source_id: Optional[str], url: str, source_names: Dict[str, str]) -> str:
