@@ -241,7 +241,7 @@ def home(limit: int = 50) -> str:
           <ul class="menu">
             <li class="active">수집 기사 목록</li>
             <li><a href="/bookmarks">찜한 기사</a></li>
-            <li>설정</li>
+            <li><a href="/settings">설정</a></li>
           </ul>
         </div>
         <div class="container">
@@ -362,7 +362,7 @@ def bookmarks(limit: int = 100) -> str:
           <ul class="menu">
             <li><a href="/">수집 기사 목록</a></li>
             <li class="active">찜한 기사</li>
-            <li>설정</li>
+            <li><a href="/settings">설정</a></li>
           </ul>
         </div>
         <div class="container">
