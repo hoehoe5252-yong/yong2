@@ -300,6 +300,9 @@ def bookmarks(limit: int = 100) -> str:
         tags_html = "".join(f'<span class="tag">{tag}</span>' for tag in tags)
         recommended = _is_recommended(title, summary, tags)
         rec_html = '<span class="badge">추천</span>' if recommended else ""
+        remove_action = f"/bookmark/{article_id}/remove"
+        if source_id == "keyword_news":
+            remove_action = f"/keyword-bookmark/{article_id}/remove"
         if logo_url:
             avatar_html = (
                 '<div class="logo-wrap">'
