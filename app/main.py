@@ -143,8 +143,8 @@ def home(limit: int = 50) -> str:
         bookmark_action = f"/bookmark/{article_id}"
         bookmark_label = "찜"
         if source_id == "keyword_news":
-            bookmark_action = f"/keyword-bookmark/{article_id}"
-            bookmark_label = "찜됨"
+            bookmark_action = ""
+            bookmark_label = ""
         remove_action = f"/bookmark/{article_id}/remove"
         if source_id == "keyword_news":
             remove_action = f"/keyword-bookmark/{article_id}/remove"
@@ -178,9 +178,7 @@ def home(limit: int = 50) -> str:
                   <div class="source">{source_label}</div>
                   <div class="date">{published_at or ""}</div>
                 </div>
-                <form class="bookmark" method="post" action="{bookmark_action}">
-                  <button type="submit">{bookmark_label}</button>
-                </form>
+                {'' if not bookmark_action else f'<form class="bookmark" method="post" action="{bookmark_action}"><button type="submit">{bookmark_label}</button></form>'}
               </header>
               <div class="tags">{tags_html}{rec_html}</div>
               <h2 class="title">
@@ -225,33 +223,11 @@ def bookmarks(limit: int = 100) -> str:
     with get_conn() as conn:
         cur = conn.execute(
             """
-            SELECT id, title, url, summary, image_url, published_at, source_id
-            FROM (
-              SELECT a.id AS id,
-                     a.title AS title,
-                     a.url AS url,
-                     a.summary AS summary,
-                     a.image_url AS image_url,
-                     a.published_at AS published_at,
-                     a.source_id AS source_id,
-                     b.created_at AS created_at
-              FROM bookmarks b
-              JOIN articles a ON a.id = b.article_id
-              WHERE b.removed_at IS NULL
-              UNION ALL
-              SELECT k.id AS id,
-                     k.title AS title,
-                     k.url AS url,
-                     k.summary AS summary,
-                     k.image_url AS image_url,
-                     k.published_at AS published_at,
-                     'keyword_news' AS source_id,
-                     kb.created_at AS created_at
-              FROM keyword_bookmarks kb
-              JOIN keyword_articles k ON k.id = kb.keyword_article_id
-              WHERE kb.removed_at IS NULL
-            )
-            ORDER BY created_at DESC
+            SELECT a.id, a.title, a.url, a.summary, a.image_url, a.published_at, a.source_id
+            FROM bookmarks b
+            JOIN articles a ON a.id = b.article_id
+            WHERE b.removed_at IS NULL
+            ORDER BY b.created_at DESC
             LIMIT ?
             """,
             (limit,),
@@ -267,8 +243,6 @@ def bookmarks(limit: int = 100) -> str:
         recommended = _is_recommended(title, summary, tags)
         rec_html = '<span class="badge">추천</span>' if recommended else ""
         remove_action = f"/bookmark/{article_id}/remove"
-        if source_id == "keyword_news":
-            remove_action = f"/keyword-bookmark/{article_id}/remove"
         if logo_url:
             avatar_html = (
                 '<div class="logo-wrap">'

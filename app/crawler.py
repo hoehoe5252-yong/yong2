@@ -102,6 +102,7 @@ def crawl_keyword_news(
             if not raw_keyword or not keyword_norm:
                 continue
             seen_urls: set[str] = set()
+            seen_titles: set[str] = set()
             collected = 0
             if "google" in source_set:
                 rss_url = _google_news_rss_url(raw_keyword)
@@ -113,7 +114,13 @@ def crawl_keyword_news(
                     url = _normalize_google_news_url(url)
                     if url in seen_urls:
                         continue
+                    press = _extract_google_press(entry, title)
+                    display_title = _format_title_with_press(title, press)
+                    title_key = _normalize_title_for_dedupe(display_title)
+                    if title_key in seen_titles:
+                        continue
                     seen_urls.add(url)
+                    seen_titles.add(title_key)
 
                     published_at = _parse_published(entry)
                     if not _is_within_days(published_at, today, days=days):
@@ -126,15 +133,13 @@ def crawl_keyword_news(
                         conn,
                         raw_keyword,
                         keyword_norm,
-                        title,
+                        display_title,
                         url,
                         summary,
                         published_at,
                     )
                     if is_new:
                         inserted += 1
-                    _bookmark_keyword_article(conn, keyword_article_id, created_at)
-                    bookmarked += 1
                     collected += 1
                     if collected >= max_items_per_keyword:
                         break
@@ -143,11 +148,17 @@ def crawl_keyword_news(
                 for item in _iter_naver_news_items(raw_keyword):
                     title = (item.get("title") or "").strip()
                     url = (item.get("url") or "").strip()
+                    press = (item.get("press") or "").strip()
                     if not title or not url:
                         continue
                     if url in seen_urls:
                         continue
+                    display_title = _format_title_with_press(title, press)
+                    title_key = _normalize_title_for_dedupe(display_title)
+                    if title_key in seen_titles:
+                        continue
                     seen_urls.add(url)
+                    seen_titles.add(title_key)
                     published_at = item.get("published_at")
                     if not _is_within_days(published_at, today, days=days):
                         continue
@@ -158,15 +169,13 @@ def crawl_keyword_news(
                         conn,
                         raw_keyword,
                         keyword_norm,
-                        title,
+                        display_title,
                         url,
                         summary,
                         published_at,
                     )
                     if is_new:
                         inserted += 1
-                    _bookmark_keyword_article(conn, keyword_article_id, created_at)
-                    bookmarked += 1
                     collected += 1
                     if collected >= max_items_per_keyword:
                         break
@@ -646,6 +655,11 @@ def _iter_naver_news_items(keyword: str) -> Iterable[dict]:
         summary_tag = container.select_one(".dsc_wrap") if container else None
         if summary_tag:
             summary = summary_tag.get_text(" ", strip=True)
+        press = ""
+        if container:
+            press_tag = container.select_one(".info_group .info")
+            if press_tag:
+                press = press_tag.get_text(" ", strip=True)
         published_at = _parse_date_text(text) or _parse_relative_date(text)
         items.append(
             {
@@ -653,6 +667,7 @@ def _iter_naver_news_items(keyword: str) -> Iterable[dict]:
                 "url": href,
                 "summary": summary,
                 "published_at": published_at,
+                "press": press,
             }
         )
     return items
@@ -676,6 +691,28 @@ def _parse_relative_date(text: str) -> Optional[str]:
     if "오늘" in text or "분 전" in text or "시간 전" in text:
         return now.isoformat()
     return None
+
+
+def _extract_google_press(entry, title: str) -> str:
+    source = getattr(entry, "source", None)
+    if source and getattr(source, "title", None):
+        return str(source.title).strip()
+    if " - " in title:
+        return title.split(" - ")[-1].strip()
+    return ""
+
+
+def _format_title_with_press(title: str, press: str) -> str:
+    clean_title = title.split(" - ")[0].strip()
+    if press:
+        return f"[{press}] {clean_title}"
+    return clean_title
+
+
+def _normalize_title_for_dedupe(title: str) -> str:
+    cleaned = re.sub(r"\[[^\]]+\]\s*", "", title)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+    return cleaned
 
 
 def _google_news_rss_url(keyword: str) -> str:
