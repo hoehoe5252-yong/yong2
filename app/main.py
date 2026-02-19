@@ -429,6 +429,7 @@ def settings() -> str:
             <form class="keyword-form" method="post" action="/crawl-keywords">
               <button type="submit">지금 키워드 뉴스 수집</button>
             </form>
+            <a class="btn-link" href="/crawl-keywords-now">지금 키워드 뉴스 수집 (링크)</a>
             <h3>활성 키워드</h3>
             {active_html}
             <h3 class="mt">비활성 키워드</h3>
@@ -541,6 +542,17 @@ def crawl_keywords() -> dict:
         sources=_KEYWORD_NEWS_SOURCES,
     )
     return result
+
+
+@app.get("/crawl-keywords-now")
+def crawl_keywords_now() -> RedirectResponse:
+    crawl_keyword_news(
+        _active_keywords(),
+        days=_KEYWORD_NEWS_DAYS,
+        max_items_per_keyword=_KEYWORD_NEWS_MAX_ITEMS,
+        sources=_KEYWORD_NEWS_SOURCES,
+    )
+    return RedirectResponse(url="/settings", status_code=303)
 
 
 @app.post("/crawl-all")
@@ -995,6 +1007,11 @@ def add_bookmark(article_id: int) -> RedirectResponse:
     return RedirectResponse(url="/bookmarks", status_code=303)
 
 
+@app.get("/bookmark/{article_id}")
+def add_bookmark_get(article_id: int) -> RedirectResponse:
+    return add_bookmark(article_id)
+
+
 @app.post("/keyword-bookmark/{keyword_article_id}")
 def add_keyword_bookmark(keyword_article_id: int) -> RedirectResponse:
     with get_conn() as conn:
@@ -1008,6 +1025,11 @@ def add_keyword_bookmark(keyword_article_id: int) -> RedirectResponse:
         )
         conn.commit()
     return RedirectResponse(url="/bookmarks", status_code=303)
+
+
+@app.get("/keyword-bookmark/{keyword_article_id}")
+def add_keyword_bookmark_get(keyword_article_id: int) -> RedirectResponse:
+    return add_keyword_bookmark(keyword_article_id)
 @app.post("/bookmark/{article_id}/remove")
 def remove_bookmark(article_id: int) -> RedirectResponse:
     with get_conn() as conn:
@@ -1385,6 +1407,19 @@ def _inline_shared_styles() -> str:
             border-radius: 999px;
             font-weight: 600;
             cursor: pointer;
+          }
+          .btn-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #ffffff;
+            color: var(--accent);
+            font-weight: 700;
+            text-decoration: none;
+            margin-bottom: 8px;
           }
           @media (max-width: 1024px) {
             .grid {
